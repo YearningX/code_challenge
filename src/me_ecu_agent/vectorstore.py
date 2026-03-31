@@ -98,6 +98,53 @@ class VectorStoreManager:
 
 # Backward compatibility functions
 def create_vector_stores(ecu_700_docs, ecu_800_docs):
+    """Create vector stores from document chunks (backward compatibility)."""
     manager = VectorStoreManager()
     manager.create_stores({"ECU-700": ecu_700_docs, "ECU-800": ecu_800_docs})
     return manager._ecu700_store, manager._ecu800_store
+
+
+def save_vector_stores(store_700, store_800, directory: str) -> None:
+    """Save vector stores to directory (backward compatibility)."""
+    save_path = Path(directory)
+    save_path.mkdir(parents=True, exist_ok=True)
+
+    if store_700:
+        store_700.save_local(str(save_path / "ecu_700_index"))
+        print(f"Saved ECU-700 store to {save_path / 'ecu_700_index'}")
+
+    if store_800:
+        store_800.save_local(str(save_path / "ecu_800_index"))
+        print(f"Saved ECU-800 store to {save_path / 'ecu_800_index'}")
+
+
+def load_vector_stores(directory: str):
+    """Load vector stores from directory (backward compatibility)."""
+    from langchain_openai import OpenAIEmbeddings
+
+    save_path = Path(directory)
+    if not save_path.exists():
+        raise FileNotFoundError(f"Directory not found: {directory}")
+
+    embeddings = OpenAIEmbeddings()
+    store_700 = None
+    store_800 = None
+
+    ecu700_path = save_path / "ecu_700_index"
+    ecu800_path = save_path / "ecu_800_index"
+
+    if ecu700_path.exists():
+        store_700 = FAISS.load_local(
+            str(ecu700_path), embeddings,
+            allow_dangerous_deserialization=True
+        )
+        print(f"Loaded ECU-700 store from {ecu700_path}")
+
+    if ecu800_path.exists():
+        store_800 = FAISS.load_local(
+            str(ecu800_path), embeddings,
+            allow_dangerous_deserialization=True
+        )
+        print(f"Loaded ECU-800 store from {ecu800_path}")
+
+    return store_700, store_800
