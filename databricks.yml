@@ -1,0 +1,318 @@
+# Databricks Asset Bundle Configuration
+# ME ECU Engineering Assistant Agent - Epic 3: Enterprise Deployment
+# Version: 0.2.0
+
+bundle:
+  name: me_ecu_agent_bundle
+  version: 0.2.0
+  description: |
+    ME ECU Engineering Assistant Agent - Production RAG System
+    Bosch ECU documentation query system with intelligent routing
+
+workspace:
+  root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+  artifact_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/artifacts/${bundle.name}
+
+# Environment configuration
+environments:
+  # Default development environment
+  default:
+    default: true
+    workspace:
+      host: ${env.DATABRICKS_HOST}
+      # Configure with: databricks bundle configure --target=dev
+    deployment:
+      mode: development
+      validate: false
+
+# Deployment targets
+targets:
+  # Development environment
+  dev:
+    default: true
+    workspace:
+      host: ${env.DATABRICKS_HOST}
+      # Configure with: databricks bundle configure --target=dev
+    deployment:
+      mode: development
+      validate: false
+    resources:
+      jobs:
+        build_and_log_model:
+          name: "[DEV] ME ECU Agent - Build and Log Model"
+          schedule:
+            pause_status: UNPAUSED  # Manual trigger only in dev
+          notifications:
+            on_failure:
+              - email:
+                  - ${var.notification_email}
+
+  # Staging environment
+  staging:
+    workspace:
+      host: ${env.DATABRICKS_HOST}
+      # Configure with: databricks bundle configure --target=staging
+    deployment:
+      mode: staging
+      validate: true
+    resources:
+      jobs:
+        build_and_log_model:
+          name: "[STAGING] ME ECU Agent - Build and Log Model"
+          schedule:
+            quartz_cron_expression: "0 0 6 ? * MON-FRI"  # Weekdays at 6 AM
+            timezone_id: UTC
+          notifications:
+            on_failure:
+              - email:
+                  - ${var.notification_email}
+            on_success:
+              - email:
+                  - ${var.notification_email}
+
+  # Production environment
+  prod:
+    workspace:
+      host: ${env.DATABRICKS_HOST}
+      # Configure with: databricks bundle configure --target=prod
+    deployment:
+      mode: production
+      validate: true
+      auto_deploy: false  # Require manual approval
+    resources:
+      jobs:
+        build_and_log_model:
+          name: "[PROD] ME ECU Agent - Build and Log Model"
+          schedule:
+            quartz_cron_expression: "0 0 2 ? * *"  # Daily at 2 AM
+            timezone_id: UTC
+          timeout_seconds: 3600
+          notifications:
+            on_failure:
+              - email:
+                  - ${var.notification_email}
+            on_success:
+              - email:
+                  - ${var.notification_email}
+
+# Resources to deploy
+resources:
+  # MLflow Models
+  models:
+    me_ecu_agent_model:
+      name: ME-ECU-Agent
+      description: |
+        Production RAG model for Bosch ECU documentation queries.
+        Supports ECU-700 and ECU-800 series with intelligent product line routing.
+        Features:
+        - Multi-format input support (DataFrame, list, string, dict)
+        - Comprehensive error handling
+        - Performance monitoring
+        - 96% accuracy on test queries
+      model_type: PYFUNC
+      local_path: ./src/me_ecu_agent/
+      dependencies:
+        - langchain>=0.2.0
+        - langchain-openai>=0.1.0
+        - langchain-community>=0.2.0
+        - langchain-core>=0.2.0
+        - langgraph>=0.1.0
+        - faiss-cpu>=1.8.0
+        - mlflow>=2.14.0
+        - tiktoken>=0.7.0
+        - python-dotenv>=1.0.0
+      env_vars:
+        OPENAI_API_KEY: ${var.openai_api_key}
+        MLFLOW_TRACKING_URI: ${var.mlflow_tracking_uri}
+
+  # Databricks Jobs
+  jobs:
+    # Main deployment job
+    build_and_log_model:
+      name: "ME ECU Agent - Build and Log Model"
+      description: |
+        Automated job to build and log MLflow model for ECU Agent.
+        Tasks:
+        1. Load and split ECU documentation
+        2. Create FAISS vector stores
+        3. Initialize LangGraph agent
+        4. Log model to MLflow with parameters and metrics
+        5. Validate model with test queries
+      tasks:
+        - task_key: validate_environment
+          description: Validate environment and dependencies
+          run_if: ALL_SUCCESS
+          new_cluster:
+            spark_version: "13.3.x-scala2.12"
+            node_type_id: "${var.node_type}"
+            num_workers: 0
+            custom_tags:
+              project: me-ecu-agent
+              stage: ${bundle.target}
+          spark_python_task:
+            python_file: ./scripts/deployment/validate_environment.py
+            parameters: []
+          libraries:
+            - pypi:
+                package_name: mlflow
+          timeout_seconds: 600
+
+        - task_key: build_and_log
+          description: Build and log MLflow model
+          depends_on:
+            - task_key: validate_environment
+          run_if: ALL_SUCCESS
+          new_cluster:
+            spark_version: "13.3.x-scala2.12"
+            node_type_id: "${var.node_type}"
+            num_workers: 0
+            spark_conf:
+              spark.task.maxFailures: "4"
+              spark.python.worker.reuse: "true"
+            custom_tags:
+              project: me-ecu-agent
+              stage: ${bundle.target}
+          spark_python_task:
+            python_file: ./scripts/log_mlflow_model.py
+            parameters: []
+          libraries:
+            - pypi:
+                package_name: mlflow>=2.14.0
+            - pypi:
+                package_name: langchain>=0.2.0
+            - pypi:
+                package_name: langchain-openai>=0.1.0
+            - pypi:
+                package_name: faiss-cpu>=1.8.0
+            - pypi:
+                package_name: python-dotenv>=1.0.0
+          timeout_seconds: 3600
+          env_vars:
+            OPENAI_API_KEY: ${var.openai_api_key}
+            MLFLOW_TRACKING_URI: ${var.mlflow_tracking_uri}
+            MLFLOW_EXPERIMENT_NAME: ${var.experiment_name}
+
+        - task_key: validate_model
+          description: Validate deployed model
+          depends_on:
+            - task_key: build_and_log
+          run_if: ALL_SUCCESS
+          new_cluster:
+            spark_version: "13.3.x-scala2.12"
+            node_type_id: "${var.node_type}"
+            num_workers: 0
+            custom_tags:
+              project: me-ecu-agent
+              stage: ${bundle.target}
+          spark_python_task:
+            python_file: ./scripts/deployment/validate_model.py
+            parameters:
+              - "--model-uri"
+              - "models:/ME-ECU-Agent/${bundle.target}"
+          libraries:
+            - pypi:
+                package_name: mlflow
+          timeout_seconds: 1800
+
+      job_clusters:
+        - job_cluster_key: "default_cluster"
+          new_cluster:
+            spark_version: "13.3.x-scala2.12"
+            node_type_id: "${var.node_type}"
+            num_workers: 0
+            spark_conf:
+              spark.task.maxFailures: "4"
+              spark.python.worker.reuse: "true"
+
+  # MLflow Experiments
+  experiments:
+    me_ecu_agent_experiment:
+      name: ME_ECU_Assistant
+      description: |
+        MLflow experiment for tracking ME ECU Agent model development.
+        Tracks:
+        - Model parameters (chunking, retrieval, LLM)
+        - Performance metrics (latency, accuracy)
+        - Model artifacts (vector stores)
+        - Evaluation results
+
+# Environment variables configuration
+variables:
+  # Required variables
+  openai_api_key:
+    description: OpenAI API key for embeddings and LLM
+    default: ""
+
+  # Optional variables with defaults
+  mlflow_tracking_uri:
+    description: MLflow tracking server URI
+    default: "databricks"
+
+  model_name:
+    description: Name for the MLflow model
+    default: ME-ECU-Agent
+
+  experiment_name:
+    description: MLflow experiment name
+    default: ME_ECU_Assistant
+
+  node_type:
+    description: Databricks node type for jobs
+    default: "i3.xlarge"
+
+  data_path:
+    description: Path to ECU documentation data
+    default: "/Workspace/Users/${workspace.current_user.userName}/me-ecu-agent/data"
+
+  notification_email:
+    description: Email for job notifications (success/failure)
+    default: ""
+
+  # Performance tuning
+  max_query_length:
+    description: Maximum query length in characters
+    default: "1000"
+
+  response_timeout:
+    description: Query response timeout in seconds
+    default: "10"
+
+# Deployment settings
+deployment:
+  # Automatic deployment validation
+  validate:
+    enabled: true
+    run_tests: true
+    test_timeout: 600
+
+  # Deployment timeout
+  timeout_seconds: 1800  # 30 minutes
+
+  # Deployment artifacts
+  include:
+    - src/me_ecu_agent/**/*.py
+    - scripts/**/*.py
+    - data/*.md
+    - pyproject.toml
+
+  # Excluded files
+  exclude:
+    - "**/__pycache__/**"
+    - "**/*.pyc"
+    - "**/.git/**"
+    - "**/tests/**"
+    - "**/_bmad/**"
+
+# Metadata
+metadata:
+  project: ME ECU Engineering Assistant Agent
+  version: 0.2.0
+  author: ME Platform Team
+  created: "2026-03-31"
+  last_updated: "2026-03-31"
+  epic: "Epic 3 - Enterprise Deployment Automation"
+  description: |
+    Complete Databricks Asset Bundle for deploying ME ECU Agent.
+    Includes multi-environment support (dev/staging/prod), automated
+    deployment pipeline, and production-grade configuration.
+
