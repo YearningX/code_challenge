@@ -38,8 +38,14 @@ env/
 *.swp
 *.swo
 *~
-.claude/*
-._bmad/*
+.claude/
+
+# BMAD framework
+# Exclude config and implementation artifacts, but keep planning docs
+_bmad/
+_bmad-output/implementation-artifacts/
+!_bmad-output/planning-artifacts/
+!_bmad-output/planning-artifacts/*.md
 
 # ML/Model tracking
 mlruns/
