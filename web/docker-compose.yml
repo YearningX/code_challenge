@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  # ME ECU Assistant API Server
+  ecu-assistant-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ecu-assistant-api
+    ports:
+      - "18500:18500"
+    environment:
+      - MLFLOW_MODEL_URI=/app/models/ecu_agent_model_local/ecu_agent_model
+      - API_HOST=0.0.0.0
+      - API_PORT=18500
+      - API_RELOAD=false
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      # Mount MLflow runs directory from host
+      - ../mlruns:/app/mlruns:ro
+      # Mount data directory for documentation
+      - ../data:/app/data:ro
+      # Mount local model artifacts
+      - ../models:/app/models:ro
+      # Mount source code for development (optional)
+      - ./api_server.py:/app/api_server.py:ro
+      - ./config.py:/app/config.py:ro
+      - ./BOSCH_LOGO.png:/app/BOSCH_LOGO.png:ro
+    networks:
+      - ecu-assistant-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18500/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "com.ecu-assistant.description=ME ECU Assistant API Server"
+      - "com.ecu-assistant.version=1.0.0"
+
+  # Nginx Reverse Proxy (Optional - for production)
+  nginx:
+    image: nginx:alpine
+    container_name: ecu-assistant-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./index.html:/usr/share/nginx/html/index.html:ro
+    networks:
+      - ecu-assistant-network
+    depends_on:
+      - ecu-assistant-api
+    restart: unless-stopped
+    profiles:
+      - production
+
+networks:
+  ecu-assistant-network:
+    driver: bridge
+    name: ecu-assistant-network
+
+volumes:
+  mlflow-data:
+    driver: local

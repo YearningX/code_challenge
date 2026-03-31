@@ -13,6 +13,7 @@ Features:
 """
 
 import logging
+import os
 import time
 from typing import Any, Dict, List, Union
 
@@ -59,6 +60,13 @@ class ECUAgentMLflowModel(PythonModel):
         try:
             logger.info("Loading ECU Agent model context...")
 
+            # Setup LangSmith tracing if environment variables are set
+            if os.getenv("LANGCHAIN_TRACING_V2") == "true":
+                logger.info("LangSmith tracing is enabled via environment variables")
+                logger.info(f"Project: {os.getenv('LANGCHAIN_PROJECT', 'default')}")
+            else:
+                logger.warning("LangSmith tracing not enabled (LANGCHAIN_TRACING_V2 not set to 'true')")
+
             # Import here to avoid serialization issues
             from me_ecu_agent.vectorstore import load_vector_stores
             from me_ecu_agent.graph import ECUQueryAgent
@@ -67,6 +75,10 @@ class ECUAgentMLflowModel(PythonModel):
             vector_store_dir = context.artifacts.get("vector_stores")
             if not vector_store_dir:
                 raise ValueError("Vector stores artifact not found in model context")
+
+            # Fix cross-platform path separator issue (Windows paths on Linux)
+            # Replace backslashes with forward slashes for Linux compatibility
+            vector_store_dir = str(vector_store_dir).replace("\\", "/")
 
             logger.info(f"Loading vector stores from {vector_store_dir}")
             store_700, store_800 = load_vector_stores(vector_store_dir)
@@ -213,8 +225,8 @@ class ECUAgentMLflowModel(PythonModel):
             result = self.graph.invoke(initial_state)
 
             # Extract response
-            last_message = result["messages"][-1]
-            response = last_message.content
+            last_message = result.get("messages", [])[-1]
+            response = last_message.content if last_message else result.get("response", "")
 
             # Calculate latency
             latency = time.time() - start_time
@@ -224,6 +236,9 @@ class ECUAgentMLflowModel(PythonModel):
             return {
                 "response": response,
                 "query": query,
+                "rewritten_query": result.get("rewritten_query", ""),
+                "detected_product_line": result.get("detected_product_line", "unknown"),
+                "retrieved_docs": result.get("retrieved_docs", []),
                 "status": "success",
                 "latency_seconds": round(latency, 2),
                 "error": None
@@ -285,25 +300,8 @@ class ECUAgentMLflowModel(PythonModel):
                 result = self._execute_query(query)
                 results.append(result)
 
-            # Return format depends on input type
-            # For single string/dict input, return single result
-            # For DataFrame/list input, return list of results
-            if isinstance(model_input, (str, dict)) and len(results) == 1:
-                # Simple format for single query
-                if isinstance(model_input, str):
-                    return [results[0]["response"]]
-                else:
-                    # Dict input returns full result
-                    return results
-
-            # Batch input returns list of responses (for compatibility)
-            # or detailed results if errors occurred
-            has_errors = any(r["status"] != "success" for r in results)
-            if has_errors:
-                return results
-            else:
-                # Simple format for successful batch
-                return [r["response"] for r in results]
+            # Always return the full detailed results to include metadata
+            return results
 
         except Exception as e:
             logger.error(f"Prediction failed: {e}")

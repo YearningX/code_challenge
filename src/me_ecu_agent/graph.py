@@ -1,7 +1,8 @@
 """
-LangGraph Agent Module - OPTIMIZED VERSION
+LangGraph Agent Module - OPTIMIZED VERSION with LangSmith Tracing
 """
 
+import os
 from typing import List, Literal, Optional, TypedDict
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -13,11 +14,22 @@ from me_ecu_agent.query_expansion import create_query_expander
 from me_ecu_agent.hyde_retriever import create_hyde_retriever
 from me_ecu_agent.hybrid_retrieval import create_hybrid_retriever
 
+# Import LangSmith callback for tracing
+try:
+    from langchain.callbacks import LangChainTracer
+    from langchain.smith import run_on_dataset
+    LANGSMITH_AVAILABLE = True
+except ImportError:
+    LANGSMITH_AVAILABLE = False
+    print("Warning: LangSmith not available. Tracing disabled.")
+
 
 class AgentState(TypedDict):
     query: str
+    rewritten_query: str
     detected_product_line: Literal["ECU-700", "ECU-800", "both", "unknown"]
     retrieved_context: str
+    retrieved_docs: List[Dict[str, Any]]
     response: str
     messages: List[BaseMessage]
 
@@ -82,6 +94,8 @@ class ECUQueryAgent:
     def _analyze_query(self, state: AgentState) -> AgentState:
         query = state["query"]
         expanded = self.query_expander.expand(query)
+        state["rewritten_query"] = expanded
+        
         # Use expanded queries for better retrieval
         chain = self.query_analysis_prompt | self.llm
         result = chain.invoke({"query": query})
@@ -101,34 +115,78 @@ class ECUQueryAgent:
         if self.ecu700_retriever is None:
             state["retrieved_context"] = "Error: ECU-700 retriever not registered"
             return state
-        docs = self.ecu700_retriever.invoke(state["query"])
-        context_parts = [f"[ECU-700: {doc.metadata.get('source', 'U')}]{doc.page_content}" for doc in docs]
+        
+        # Support both single string and list of strings
+        queries = state["rewritten_query"] if isinstance(state["rewritten_query"], list) else [state["query"]]
+        all_docs = []
+        seen_content = set()
+        
+        for q in queries:
+            docs = self.ecu700_retriever.invoke(q)
+            for doc in docs:
+                if doc.page_content not in seen_content:
+                    all_docs.append(doc)
+                    seen_content.add(doc.page_content)
+        
+        state["retrieved_docs"] = [{"content": doc.page_content, "metadata": doc.metadata} for doc in all_docs]
+        context_parts = [f"[ECU-700: {doc.metadata.get('source', 'U')}]{doc.page_content}" for doc in all_docs]
         state["retrieved_context"] = " ".join(context_parts)
-        state["messages"].append(AIMessage(content=f"Retrieved {len(docs)} from ECU-700"))
+        state["messages"].append(AIMessage(content=f"Retrieved {len(all_docs)} from ECU-700"))
         return state
 
     def _retrieve_ecu800(self, state: AgentState) -> AgentState:
         if self.ecu800_retriever is None:
             state["retrieved_context"] = "Error: ECU-800 retriever not registered"
             return state
-        docs = self.ecu800_retriever.invoke(state["query"])
-        context_parts = [f"[ECU-800: {doc.metadata.get('source', 'U')}]{doc.page_content}" for doc in docs]
+            
+        queries = state["rewritten_query"] if isinstance(state["rewritten_query"], list) else [state["query"]]
+        all_docs = []
+        seen_content = set()
+        
+        for q in queries:
+            docs = self.ecu800_retriever.invoke(q)
+            for doc in docs:
+                if doc.page_content not in seen_content:
+                    all_docs.append(doc)
+                    seen_content.add(doc.page_content)
+                    
+        state["retrieved_docs"] = [{"content": doc.page_content, "metadata": doc.metadata} for doc in all_docs]
+        context_parts = [f"[ECU-800: {doc.metadata.get('source', 'U')}]{doc.page_content}" for doc in all_docs]
         state["retrieved_context"] = " ".join(context_parts)
-        state["messages"].append(AIMessage(content=f"Retrieved {len(docs)} from ECU-800"))
+        state["messages"].append(AIMessage(content=f"Retrieved {len(all_docs)} from ECU-800"))
         return state
 
     def _parallel_retrieval(self, state: AgentState) -> AgentState:
         contexts = []
+        final_docs_list = []
+        seen_content = set()
+        queries = state["rewritten_query"] if isinstance(state["rewritten_query"], list) else [state["query"]]
+
         if self.ecu700_retriever is not None:
-            docs_700 = self.ecu700_retriever.invoke(state["query"])
-            context_700 = " ".join([f"[ECU-700]{doc.page_content}" for doc in docs_700])
-            contexts.append(context_700)
+            docs_700 = []
+            for q in queries:
+                res = self.ecu700_retriever.invoke(q)
+                for doc in res:
+                    if doc.page_content not in seen_content:
+                        docs_700.append(doc)
+                        seen_content.add(doc.page_content)
+            final_docs_list.extend([{"content": doc.page_content, "metadata": doc.metadata} for doc in docs_700])
+            contexts.append(" ".join([f"[ECU-700]{doc.page_content}" for doc in docs_700]))
+            
         if self.ecu800_retriever is not None:
-            docs_800 = self.ecu800_retriever.invoke(state["query"])
-            context_800 = " ".join([f"[ECU-800]{doc.page_content}" for doc in docs_800])
-            contexts.append(context_800)
+            docs_800 = []
+            for q in queries:
+                res = self.ecu800_retriever.invoke(q)
+                for doc in res:
+                    if doc.page_content not in seen_content:
+                        docs_800.append(doc)
+                        seen_content.add(doc.page_content)
+            final_docs_list.extend([{"content": doc.page_content, "metadata": doc.metadata} for doc in docs_800])
+            contexts.append(" ".join([f"[ECU-800]{doc.page_content}" for doc in docs_800]))
+            
+        state["retrieved_docs"] = final_docs_list
         state["retrieved_context"] = " ".join(contexts)
-        state["messages"].append(AIMessage(content="Retrieved from both stores"))
+        state["messages"].append(AIMessage(content=f"Parallel retrieval complete: {len(final_docs_list)} docs"))
         return state
 
     def _synthesize_response(self, state: AgentState) -> AgentState:
@@ -171,8 +229,10 @@ class ECUQueryAgent:
         graph = self.create_graph()
         initial_state = AgentState(
             query=query,
+            rewritten_query="",
             detected_product_line="unknown",
             retrieved_context="",
+            retrieved_docs=[],
             response="",
             messages=[HumanMessage(content=query)]
         )
