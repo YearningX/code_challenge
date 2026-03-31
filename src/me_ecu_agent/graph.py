@@ -24,48 +24,49 @@ class AgentState(TypedDict):
 
 class ECUQueryAgent:
     """Enhanced with HyDE (Hypothetical Document Embeddings)."""
+
     def __init__(self, config: LLMConfig = None):
         self.config = config or LLMConfig()
         self.llm = ChatOpenAI(model=self.config.model_name, temperature=self.config.temperature)
         self.query_expander = create_query_expander()
         self.ecu700_retriever: Optional[VectorStoreRetriever] = None
         self.ecu800_retriever: Optional[VectorStoreRetriever] = None
-        
+
         # OPTIMIZED: Enhanced query analysis prompt
         self.query_analysis_prompt = ChatPromptTemplate.from_messages([
             ("system", "You are a Bosch ECU product line classifier. " +
-            "CRITICAL RULES: " +
-            "1. If query asks about 'all models', 'across all', 'each model', or similar -> respond 'both' " +
-            "2. If query compares ECU-750 with ECU-850/850b -> respond 'both' " +
-            "3. Distinguish ECU-850 (base) from ECU-850b (enhanced). " +
-            "Examples: " +
-            "'ECU-750 specs'->ECU-700, " +
-            "'ECU-850 RAM'->ECU-800, " +
-            "'ECU-850b NPU'->ECU-800, " +
-            "'Compare ECU-750 and ECU-850'->both, " +
-            "'storage across all models'->both, " +
-            "'compare all ECUs'->both. " +
-            "Classification Rules: " +
-            "ECU-700=ECU-750 ONLY. " +
-            "ECU-800=ECU-850 OR ECU-850b. " +
-            "both=Any comparison or 'all models' query. " +
-            "Respond ONLY: ECU-700, ECU-800, both, or unknown"),
+             "CRITICAL RULES: " +
+             "1. If query asks about 'all models', 'across all', 'each model', or similar -> respond 'both' " +
+             "2. If query compares ECU-750 with ECU-850/850b -> respond 'both' " +
+             "3. Distinguish ECU-850 (base) from ECU-850b (enhanced). " +
+             "Examples: " +
+             "'ECU-750 specs'->ECU-700, " +
+             "'ECU-850 RAM'->ECU-800, " +
+             "'ECU-850b NPU'->ECU-800, " +
+             "'Compare ECU-750 and ECU-850'->both, " +
+             "'storage across all models'->both, " +
+             "'compare all ECUs'->both. " +
+             "Classification Rules: " +
+             "ECU-700=ECU-750 ONLY. " +
+             "ECU-800=ECU-850 OR ECU-850b. " +
+             "both=Any comparison or 'all models' query. " +
+             "Respond ONLY: ECU-700, ECU-800, both, or unknown"),
             ("human", "{query}")
         ])
-        
+
         # OPTIMIZED: Balanced synthesis prompt - relevant but complete
         self.response_synthesis_prompt = ChatPromptTemplate.from_messages([
             ("system", "You are a Bosch ECU technical assistant. " +
-            "CRITICAL INSTRUCTIONS: " +
-            "1. Always specify exact model names (ECU-750/850/850b). " +
-            "2. Answer using RELEVANT information from context (don't include unrelated specs). " +
-            "3. COMPREHENSIVENESS for the asked question: " +
-            "   - For 'which models support X': List both supported AND unsupported models. " +
-            "   - For 'compare all': Provide info for each relevant model. " +
-            "   - For specs with multiple states (idle/load, min/max): Include ALL states. " +
-            "4. Use exact numbers and units from context. " +
-            "5. Only use provided information - do not hallucinate. " +
-            "Context: {context}."),
+             "CRITICAL INSTRUCTIONS: " +
+             "1. Always specify exact model names (ECU-750/850/850b). " +
+             "2. Answer using RELEVANT information from context (don't include unrelated specs). " +
+             "3. COMPREHENSIVENESS for the asked question: " +
+             "   - For 'which models support X': List both supported AND unsupported models. " +
+             "   - For 'compare all': Provide info for each relevant model. " +
+             "   - For specs with multiple states (idle/load, min/max): Include ALL states. " +
+             "4. Use exact numbers and units from context. " +
+             "5. Only use provided information - do not hallucinate. " +
+             "Context: {context}."),
             ("human", "{query}")
         ])
 
@@ -179,16 +180,16 @@ class ECUQueryAgent:
         # OPTIMIZED: Balanced synthesis prompt - relevant but complete
         self.response_synthesis_prompt = ChatPromptTemplate.from_messages([
             ("system", "You are a Bosch ECU technical assistant. " +
-            "CRITICAL INSTRUCTIONS: " +
-            "1. Always specify exact model names (ECU-750/850/850b). " +
-            "2. Answer using RELEVANT information from context (don't include unrelated specs). " +
-            "3. COMPREHENSIVENESS for the asked question: " +
-            "   - For 'which models support X': List both supported AND unsupported models. " +
-            "   - For 'compare all': Provide info for each relevant model. " +
-            "   - For specs with multiple states (idle/load, min/max): Include ALL states. " +
-            "4. Use exact numbers and units from context. " +
-            "5. Only use provided information - do not hallucinate. " +
-            "Context: {context}."),
+             "CRITICAL INSTRUCTIONS: " +
+             "1. Always specify exact model names (ECU-750/850/850b). " +
+             "2. Answer using RELEVANT information from context (don't include unrelated specs). " +
+             "3. COMPREHENSIVENESS for the asked question: " +
+             "   - For 'which models support X': List both supported AND unsupported models. " +
+             "   - For 'compare all': Provide info for each relevant model. " +
+             "   - For specs with multiple states (idle/load, min/max): Include ALL states. " +
+             "4. Use exact numbers and units from context. " +
+             "5. Only use provided information - do not hallucinate. " +
+             "Context: {context}."),
             ("human", "{query}")
         ])
         return result

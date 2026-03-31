@@ -77,7 +77,7 @@ class LLMError(ECUAgentError):
         super().__init__(message, ErrorCode.LLM_ERROR, details)
 
 
-class TimeoutError(ECUAgentError):
+class TimeoutException(ECUAgentError):
     """Raised when operation times out."""
 
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):

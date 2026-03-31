@@ -1,9 +1,13 @@
+"""Model module."""
+
 import mlflow
+
 
 class ECUAgentModel(mlflow.pyfunc.PythonModel):
     """
     MLflow custom PyFunc wrapper for the LangGraph ECU Agent.
     """
+
     def load_context(self, context):
         """
         Loads the FAISS indices from the model context.
@@ -12,16 +16,16 @@ class ECUAgentModel(mlflow.pyfunc.PythonModel):
         from me_ecu_agent.vectorstore import load_vector_stores
         from me_ecu_agent.tools import get_agent_tools
         from me_ecu_agent.graph import build_graph
-        
+
         # The vector stores directory will be saved as an artifact
         vector_store_dir = context.artifacts["vector_stores"]
-        
+
         # Load indexes
         store_700, store_800 = load_vector_stores(vector_store_dir)
-        
+
         # Build tools logic
         tools = get_agent_tools(store_700, store_800)
-        
+
         # Compile graph
         self.graph = build_graph(tools)
 
@@ -32,7 +36,7 @@ class ECUAgentModel(mlflow.pyfunc.PythonModel):
         """
         import pandas as pd
         from langchain_core.messages import HumanMessage
-        
+
         # Handle different input formats cleanly
         queries = []
         if isinstance(model_input, pd.DataFrame):
@@ -58,15 +62,15 @@ class ECUAgentModel(mlflow.pyfunc.PythonModel):
                 initial_state = {
                     "messages": [HumanMessage(content=query)]
                 }
-                
+
                 # Execute graph
                 # Using invoke for a full un-streamed run
                 result = self.graph.invoke(initial_state)
-                
+
                 # Extract the last AI response
                 last_message = result["messages"][-1]
                 responses.append(last_message.content)
-                
+
             except Exception as e:
                 # Fallback on errors to prevent full batch failure
                 responses.append(f"Error executing agent: {str(e)}")

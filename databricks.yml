@@ -266,7 +266,7 @@ variables:
 
   notification_email:
     description: Email for job notifications (success/failure)
-    default: ""
+    default: "xiazhichao9612@gmail.com"
 
   # Performance tuning
   max_query_length:
