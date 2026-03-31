@@ -1,0 +1,113 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.virtualenv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.claude/*
+._bmad/*
+
+# ML/Model tracking
+mlruns/
+mlflow.db
+*.mlmodel
+*.pkl
+*.pickle
+*.joblib
+
+# Data directories
+# Keep data/ but exclude intermediate test results
+data/test-results.csv
+data/test-results-corrected.csv
+data/final-test-results.csv
+data/test-results-llm-judge.csv
+vector_stores_temp/
+*.csv
+*.json
+*.parquet
+!config/*.json
+!tests/fixtures/*.json
+!data/*.md
+!data/test-questions.csv
+
+# Temporary test scripts (not for production)
+scripts/fix_dates.py
+scripts/fix_prompt.py
+scripts/test_corrected.py
+scripts/test_final_optimized.py
+scripts/test_ultra_optimized.py
+scripts/upgrade_llm_models.py
+scripts/update_all_llm_models.py
+scripts/verify_llm_update.py
+
+# Intermediate analysis documents
+docs/ACCURACY-ANALYSIS.md
+docs/HONEST-ASSESSMENT.md
+docs/FINAL-ASSESSMENT.md
+docs/EVALUATION-ANALYSIS.md
+docs/final-optimization-report.md
+docs/test-results-analysis.md
+docs/EPIC1-SUCCESS.md
+docs/HyDE-SUCCESS.md
+docs/DATE-CORRECTION-SUMMARY.md
+docs/optimization-results.md
+docs/PROMPT-ANALYSIS.md
+docs/EPIC-1-SUMMARY.md
+docs/LLM-UPGRADE-SUMMARY.md
+docs/LLM-MODEL-ANALYSIS.md
+docs/LLM-UPDATE-COMPLETE.md
+docs/epic-1-completion-summary.md
+docs/CURRENT-ACCURACY-ANALYSIS.md
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Documentation
+docs/_build/
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Project specific
+databricks.yml
+*.state.json

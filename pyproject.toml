@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "me_ecu_agent"
+version = "0.1.0"
+description = "ME ECU Engineering Assistant Agent"
+authors = [
+    { name = "ME Engineering", email = "engineering@me.local" },
+]
+dependencies = [
+    "langchain>=0.2.0",
+    "langchain-community>=0.2.0",
+    "langchain-openai>=0.1.0",
+    "langgraph>=0.1.0",
+    "mlflow>=2.14.0",
+    "faiss-cpu>=1.8.0",
+    "pydantic>=2.7.0",
+    "tiktoken>=0.7.0",
+    "pytest>=8.0.0",
+    "python-dotenv>=1.0.0",
+]
+requires-python = ">=3.9"
+
+[tool.setuptools.packages.find]
+where = ["src"]
