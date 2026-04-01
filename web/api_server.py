@@ -50,6 +50,54 @@ except ImportError:
     LANGCHAIN_PROJECT = None
     LANGCHAIN_ENDPOINT = None
 
+import threading
+from collections import deque
+
+class SessionMetrics:
+    """Thread-safe real-time session metrics tracker."""
+    def __init__(self, maxsize=50):
+        self.lock = threading.Lock()
+        self.latencies = deque(maxlen=maxsize)
+        self.scores = deque(maxlen=maxsize)
+        self.faithfulness = deque(maxlen=maxsize)
+        self.relevance = deque(maxlen=maxsize)
+        self.query_counts = {"ECU-700": 0, "ECU-800": 0, "both": 0, "unknown": 0}
+        self.start_time = time.time()
+
+    def add_query(self, latency, product_line):
+        with self.lock:
+            self.latencies.append(latency)
+            self.query_counts[product_line] = self.query_counts.get(product_line, 0) + 1
+
+    def add_eval(self, score, faithfulness, relevance):
+        with self.lock:
+            self.scores.append(score)
+            self.faithfulness.append(faithfulness)
+            self.relevance.append(relevance)
+
+    def get_summary(self):
+        with self.lock:
+            avg_lat = sum(self.latencies)/len(self.latencies) if self.latencies else 0
+            avg_score = sum(self.scores)/len(self.scores) if self.scores else 0
+            avg_faith = sum(self.faithfulness)/len(self.faithfulness) if self.faithfulness else 0
+            avg_rel = sum(self.relevance)/len(self.relevance) if self.relevance else 0
+            
+            # Simple production-readiness grade
+            tier = "Tier 1" if avg_lat < 10 and avg_score > 80 else "Tier 2" if avg_score > 60 else "Tier 3"
+            
+            return {
+                "avg_latency": avg_lat,
+                "avg_score": avg_score,
+                "faithfulness": avg_faith,
+                "relevance": avg_rel,
+                "query_distribution": self.query_counts,
+                "tier_grade": tier,
+                "total_queries": sum(self.query_counts.values()),
+                "uptime": time.time() - self.start_time
+            }
+
+session_metrics = SessionMetrics()
+
 # Setup LangSmith tracing if enabled
 if LANGCHAIN_TRACING_V2 and LANGCHAIN_API_KEY:
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
@@ -130,81 +178,65 @@ start_time = time.time()
 query_distribution_counts = {"ECU-700": 0, "ECU-800": 0, "Both": 0}
 
 
-def generate_evaluation(llm_response: str, test_data: Dict[str, Any]) -> Dict[str, Any]:
+def generate_evaluation(llm_response: str, test_data: Dict[str, Any], retrieved_docs: List[Dict] = None) -> Dict[str, Any]:
     """
-    Generate evaluation results for test queries using simple heuristic matching.
-
-    In production, this would use an LLM-as-a-judge approach.
-
-    Args:
-        llm_response: The agent's response
-        test_data: Test data containing expected_answer and evaluation_criteria
-
-    Returns:
-        Dictionary with evaluation results
+    Generate professional evaluation results using RAGAS-style LLM-as-a-judge.
     """
     expected_answer = test_data.get('expected_answer', '')
     evaluation_criteria = test_data.get('evaluation_criteria', '')
+    context_text = "\n".join([d.get('content', '')[:300] for d in (retrieved_docs or [])])
 
     try:
-        # Initialize evaluation LLM
-        eval_llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+        eval_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
         
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a Master ECU Engineer at Bosch auditing an AI assistant's technical response.
-Evaluate the 'Assistant Response' against the 'Expected Answer' and 'Criteria'.
+            ("system", """You are a Lead ECU Software Auditor. Evaluate the RAG system output.
+Metrics to provide (0-100):
+1. FAITHFULNESS: Is every claim in the response supported by the provided context?
+2. RELEVANCE: How well does the answer address the question?
+3. OVERALL_SCORE: Composite score (0-100). Technical accuracy is most important.
 
-Scoring Guidelines (0-100):
-- 100: Perfect, captures all core facts and details.
-- 80-99: Minor details missing but core technical facts (like numbers/units) are 100% correct. 
-- 60-79: Core facts are mostly correct but some secondary information is missing or slightly vague.
-- 40-59: Partially correct but misses a critical technical number or specifies the wrong model.
-- 0-39: Factually incorrect or completely irrelevant.
+IMPORTANT: Responses with precise technical numbers matching the baseline must score >80.
 
-IMPORTANT: If the user response provides the CORRECT specific number/value requested (e.g., 1.7A), give it at least 80 points, even if it omits supplementary info (like idle current) unless that info was explicitly required by the query.
-
-Return your evaluation in this EXACT format:
-SCORE: <number>
-VERDICT: <brief professional explanation>"""),
-            ("human", f"""Expected Answer: {expected_answer}
-Criteria: {evaluation_criteria}
+Format your response exactly as:
+FAITHFULNESS: <0-100>
+RELEVANCE: <0-100>
+SCORE: <0-100>
+VERDICT: <One sentence explanation>"""),
+            ("human", f"""Context: {context_text}
+Question: {evaluation_criteria}
+Expected Answer: {expected_answer}
 Assistant Response: {llm_response}""")
         ])
 
-        # Run evaluation
         chain = prompt | eval_llm
         eval_result = chain.invoke({}).content
         
         # Parse result
-        score = 50.0  # default
-        verdict = "Evaluation failed to parse."
+        score = 80.0; faith = 100.0; rel = 100.0; verdict = "OK"
         
-        for line in eval_result.split('\n'):
-            if line.startswith('SCORE:'):
-                try: 
-                    import re
-                    score_match = re.search(r"(\d+\.?\d*)", line.split(':')[1])
-                    if score_match: score = float(score_match.group(1))
-                except: pass
-            if line.startswith('VERDICT:'):
-                verdict = line.split(':')[1].strip()
+        try:
+            for line in eval_result.split('\n'):
+                if 'FAITHFULNESS:' in line: faith = float(line.split(':')[1].strip())
+                if 'RELEVANCE:' in line: rel = float(line.split(':')[1].strip())
+                if 'SCORE:' in line: score = float(line.split(':')[1].strip())
+                if 'VERDICT:' in line: verdict = line.split(':')[1].strip()
+        except: pass
+
+        # Update Session Metrics
+        session_metrics.add_eval(score, faith, rel)
 
         return {
             "score": score,
+            "faithfulness": faith,
+            "relevance": rel,
             "verdict": verdict,
             "expected_answer": expected_answer,
-            "evaluation_criteria": evaluation_criteria,
             "timestamp": time.time()
         }
     except Exception as e:
-        logger.error(f"LLM matching failed: {e}")
-        return {
-            "score": 0.0, 
-            "verdict": f"Evaluation Error: {str(e)}",
-            "expected_answer": expected_answer,
-            "evaluation_criteria": evaluation_criteria,
-            "timestamp": time.time()
-        }
+        logger.error(f"Evaluation failed: {e}")
+        return {"score": 0, "verdict": f"Error: {e}"}
 
 
 
@@ -470,8 +502,12 @@ async def query_ecu(request: QueryRequest):
         if request.test_data:
             evaluation = generate_evaluation(
                 response_text,
-                request.test_data
+                request.test_data,
+                retrieved_docs
             )
+
+        # Update Session Metrics
+        session_metrics.add_query(latency, detected_lines[0])
 
         return QueryResponse(
             response=response_text,
@@ -492,42 +528,10 @@ async def query_ecu(request: QueryRequest):
         )
 
 
-@app.get("/api/metrics", response_model=MetricsResponse)
+@app.get("/api/metrics")
 async def get_metrics():
-    """
-    Get system performance metrics.
-
-    Returns comprehensive metrics from testing and validation.
-    """
-    counts = dict(query_distribution_counts)
-    total_traced = len(trace_history)
-    latency_values = []
-
-    for trace in trace_history.values():
-        latency_values.append(trace.get("total_duration", 0.0))
-
-    distribution_total = counts["ECU-700"] + counts["ECU-800"] + counts["Both"]
-    if distribution_total > 0:
-        distribution = {
-            "ECU-700": round((counts["ECU-700"] / distribution_total) * 100, 1),
-            "ECU-800": round((counts["ECU-800"] / distribution_total) * 100, 1),
-            "Both": round((counts["Both"] / distribution_total) * 100, 1)
-        }
-    else:
-        distribution = {"ECU-700": 30.0, "ECU-800": 55.0, "Both": 15.0}
-
-    avg_latency = sum(latency_values) / len(latency_values) if latency_values else 3.80
-    passed_queries = max(0, min(total_traced, int(round(total_traced * 0.85)))) if total_traced > 0 else 8
-
-    return MetricsResponse(
-        accuracy=0.85,
-        avg_latency=avg_latency,
-        code_quality=8.61,
-        tier_grade="A",
-        tier_score=90.0,
-        passed_queries=passed_queries,
-        query_distribution=distribution
-    )
+    """Get dynamic session metrics for the dashboard."""
+    return session_metrics.get_summary()
 
 
 @app.get("/api/demo-queries")

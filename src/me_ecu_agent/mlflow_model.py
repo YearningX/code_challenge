@@ -76,12 +76,33 @@ class ECUAgentMLflowModel(PythonModel):
             if not vector_store_dir:
                 raise ValueError("Vector stores artifact not found in model context")
 
-            # Fix cross-platform path separator issue (Windows paths on Linux)
-            # Replace backslashes with forward slashes for Linux compatibility
-            vector_store_dir = str(vector_store_dir).replace("\\", "/")
+            # Fix: Try both the artifact path and potential relative paths
+            potential_paths = [
+                vector_store_dir,
+                str(Path(vector_store_dir).parent / "data"),
+                "/app/models/ecu_agent_model_local/ecu_agent_model/artifacts/vector_stores_yrw1jr2e",
+                "/app/data",
+                os.path.join(os.getcwd(), "data")
+            ]
+            
+            store_700 = None
+            store_800 = None
+            
+            for path in potential_paths:
+                if not path: continue
+                clean_path = str(path).replace("\\", "/")
+                if os.path.exists(clean_path):
+                    try:
+                        logger.info(f"Attempting to load vector stores from: {clean_path}")
+                        store_700, store_800 = load_vector_stores(clean_path)
+                        if store_700 or store_800:
+                            logger.info(f"Successfully loaded stores from {clean_path}")
+                            break
+                    except Exception as e:
+                        logger.warning(f"Could not load stores from {clean_path}: {e}")
 
-            logger.info(f"Loading vector stores from {vector_store_dir}")
-            store_700, store_800 = load_vector_stores(vector_store_dir)
+            if not store_700 and not store_800:
+                logger.error("CRITICAL: No vector stores could be loaded from any attempt.")
 
             # Create agent and register retrievers
             logger.info("Creating ECU Query Agent...")

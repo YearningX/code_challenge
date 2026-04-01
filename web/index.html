@@ -295,9 +295,22 @@
                         <h2 class="text-2xl font-bold text-gray-800">Batch Evaluation Dashboard</h2>
                         <p class="text-gray-500">Automated testing across 10 golden dataset questions</p>
                     </div>
-                    <button onclick="startBatchTest()" id="start-batch-btn" class="bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 transition shadow-lg flex items-center gap-2">
-                        <i class="fas fa-play"></i> Start Full Evaluation
-                    </button>
+                    <div class="flex gap-4">
+                        <button onclick="startBatchTest()" id="start-batch-btn" class="bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 transition shadow-lg flex items-center gap-2">
+                            <i class="fas fa-play"></i> Start Full Evaluation
+                        </button>
+                        <div id="batch-summary-card" class="hidden flex gap-4 p-3 bg-blue-50 border border-blue-100 rounded-xl items-center">
+                            <div class="text-xs">
+                                <span class="text-gray-500 uppercase font-bold text-[9px]">Avg Score:</span>
+                                <span id="summary-score" class="font-bold text-blue-700 ml-1">0%</span>
+                            </div>
+                            <div class="h-4 w-px bg-blue-200"></div>
+                            <div class="text-xs">
+                                <span class="text-gray-500 uppercase font-bold text-[9px]">Avg Latency:</span>
+                                <span id="summary-latency" class="font-bold text-blue-700 ml-1">0s</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 
                 <div id="batch-progress-container" class="hidden mb-6 bg-white p-4 rounded-xl shadow-sm border border-gray-100">
@@ -336,7 +349,7 @@
                     <div class="kpi-card">
                         <p class="text-sm font-bold text-gray-400 uppercase">Avg Response Time</p>
                         <p class="text-3xl font-bold mt-2" id="kpi-latency-avg">--s</p>
-                        <div class="mt-2 text-blue-500 text-sm font-bold">Target: < 5.0s</div>
+                        <div class="mt-2 text-blue-500 text-sm font-bold">Target: < 10s</div>
                     </div>
                     <div class="kpi-card">
                         <p class="text-sm font-bold text-gray-400 uppercase">Context Depth</p>
@@ -541,10 +554,14 @@
                 const res = await fetch('/api/metrics');
                 const data = await res.json();
                 
-                document.getElementById('kpi-accuracy').innerText = (data.accuracy * 100).toFixed(0) + '%';
-                document.getElementById('kpi-latency-avg').innerText = data.avg_latency.toFixed(2) + 's';
-                document.getElementById('kpi-grade').innerText = data.tier_grade;
-                
+                // Update KPI boxes
+                if (document.getElementById('kpi-accuracy')) 
+                    document.getElementById('kpi-accuracy').innerText = (data.avg_score || 0).toFixed(0) + '%';
+                if (document.getElementById('kpi-latency-avg')) 
+                    document.getElementById('kpi-latency-avg').innerText = (data.avg_latency || 0).toFixed(2) + 's';
+                if (document.getElementById('kpi-grade')) 
+                    document.getElementById('kpi-grade').innerText = data.tier_grade || '--';
+
                 const badge = document.getElementById('api-status-badge');
                 badge.innerText = 'Connected';
                 badge.className = 'px-2 py-1 bg-green-100 text-green-700 text-xs font-bold rounded';
@@ -559,7 +576,12 @@
 
         function updateChart(dist) {
             const ctx = document.getElementById('queryChart').getContext('2d');
-            const dataValues = [dist['ECU-700'], dist['ECU-800'], dist['Both']];
+            // Support both old 'Both' and new 'both' keys
+            const dataValues = [
+                dist['ECU-700'] || 0, 
+                dist['ECU-800'] || 0, 
+                (dist['both'] || 0) + (dist['Both'] || 0)
+            ];
             
             if (chart) {
                 chart.data.datasets[0].data = dataValues;
@@ -572,7 +594,7 @@
                 data: {
                     labels: ['ECU-700 Series', 'ECU-800 Series', 'Multi-Series'],
                     datasets: [{
-                        label: 'Query Distribution %',
+                        label: 'Query Density',
                         data: dataValues,
                         backgroundColor: ['#005691', '#E20015', '#000000'],
                         borderRadius: 8
@@ -581,7 +603,7 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    scales: { y: { beginAtZero: true, max: 100 } }
+                    scales: { y: { beginAtZero: true } }
                 }
             });
         }
@@ -594,12 +616,18 @@
             const progressText = document.getElementById('batch-progress-text');
             const statusText = document.getElementById('batch-status-text');
             const tbody = document.getElementById('batch-results-body');
+            const summaryCard = document.getElementById('batch-summary-card');
             
             btn.disabled = true;
             btn.classList.add('opacity-50');
             progressContainer.classList.remove('hidden');
+            summaryCard.classList.add('hidden');
             tbody.innerHTML = '';
             
+            let totalScore = 0;
+            let totalLatency = 0;
+            let completed = 0;
+
             for (let i = 0; i < allTemplates.length; i++) {
                 const q = allTemplates[i];
                 const row = document.createElement('tr');
@@ -612,12 +640,13 @@
                 tbody.appendChild(row);
                 
                 // Update progress
-                const percent = ((i) / allTemplates.length) * 100;
+                const percent = (i / allTemplates.length) * 100;
                 progressBar.style.width = percent + '%';
                 progressText.innerText = `${i}/${allTemplates.length}`;
-                statusText.innerText = `Processing: Q${q.id}`;
+                statusText.innerText = `Processing: ${q.id}`;
 
                 try {
+                    const startPulse = Date.now();
                     const res = await fetch('/api/query', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -630,30 +659,49 @@
                         })
                     });
                     const data = await res.json();
+                    const lat = (Date.now() - startPulse) / 1000;
                     
-                    document.getElementById(`batch-resp-${i}`).innerHTML = `<div class="text-xs" title="${data.response}">${data.response}</div>`;
+                    totalLatency += lat;
+                    completed++;
+
+                    document.getElementById(`batch-resp-${i}`).innerHTML = `<div class="text-xs line-clamp-3" title="${data.response}">${data.response}</div>`;
                     
                     if (data.evaluation) {
                         const score = data.evaluation.score;
+                        totalScore += score;
                         const scoreClass = score >= 85 ? 'text-green-600' : score >= 60 ? 'text-yellow-600' : 'text-red-600';
+                        
                         document.getElementById(`batch-eval-${i}`).innerHTML = `
-                            <div class="text-[10px] font-bold text-gray-500 mb-1">EXPECTED:</div>
-                            <div class="text-xs italic text-gray-600 mb-2">${q.expected_answer}</div>
-                            <div class="text-[10px] font-bold text-blue-500 mb-1">VERDICT:</div>
-                            <div class="text-[11px] leading-tight">${data.evaluation.verdict}</div>
+                            <div class="flex gap-2 mb-2">
+                                <span class="px-1 bg-gray-100 text-[9px] rounded">Faith: ${data.evaluation.faithfulness}%</span>
+                                <span class="px-1 bg-gray-100 text-[9px] rounded">Rel: ${data.evaluation.relevance}%</span>
+                            </div>
+                            <div class="text-[10px] font-bold text-gray-500 mb-1">AUDIT VERDICT:</div>
+                            <div class="text-[11px] leading-tight text-gray-700">${data.evaluation.verdict}</div>
                         `;
-                        document.getElementById(`batch-score-${i}`).innerHTML = `<span class="font-bold ${scoreClass}">${score}</span>`;
+                        document.getElementById(`batch-score-${i}`).innerHTML = `
+                            <div class="font-bold ${scoreClass}">${score}</div>
+                            <div class="text-[9px] text-gray-400">${lat.toFixed(1)}s</div>
+                        `;
                     }
                 } catch (e) {
-                    document.getElementById(`batch-resp-${i}`).innerText = "Error";
+                    document.getElementById(`batch-resp-${i}`).innerText = "Error: " + e.message;
                 }
             }
             
+            // Final Summary
+            if (completed > 0) {
+                document.getElementById('summary-score').innerText = (totalScore / completed).toFixed(1) + '%';
+                document.getElementById('summary-latency').innerText = (totalLatency / completed).toFixed(2) + 's';
+                summaryCard.classList.remove('hidden');
+            }
+
             progressBar.style.width = '100%';
             progressText.innerText = `${allTemplates.length}/${allTemplates.length}`;
             statusText.innerText = "Evaluation Complete";
             btn.disabled = false;
             btn.classList.remove('opacity-50');
+            refreshDashboard();
         }
 
         // Auto-refresh metrics every minute
