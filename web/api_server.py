@@ -156,6 +156,7 @@ class QueryResponse(BaseModel):
     timestamp: float = Field(..., description="Unix timestamp")
     trace_id: Optional[str] = Field(None, description="Trace ID for detailed execution trace")
     evaluation: Optional[Dict[str, Any]] = Field(None, description="Evaluation results for test mode")
+    is_relevant: bool = Field(True, description="Whether query is relevant to ECU products")
 
 
 class MetricsResponse(BaseModel):
@@ -213,16 +214,21 @@ def generate_evaluation(llm_response: str, test_data: Dict[str, Any], retrieved_
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a Lead ECU Software Auditor. Evaluate the RAG system output.
-Metrics to provide (0-100):
+
+RAGAs Metrics to provide (0-100):
 1. FAITHFULNESS: Is every claim in the response supported by the provided context?
-2. RELEVANCE: How well does the answer address the question?
-3. OVERALL_SCORE: Composite score (0-100). Technical accuracy is most important.
+2. ANSWER_RELEVANCE: How well does the answer address the question?
+3. CONTEXT_PRECISION: How relevant is the retrieved context to the question?
+4. CONTEXT_RECALL: How well does the context cover the information needed?
+5. OVERALL_SCORE: Composite score (0-100). Technical accuracy is most important.
 
 IMPORTANT: Responses with precise technical numbers matching the baseline must score >80.
 
 Format your response exactly as:
 FAITHFULNESS: <0-100>
-RELEVANCE: <0-100>
+ANSWER_RELEVANCE: <0-100>
+CONTEXT_PRECISION: <0-100>
+CONTEXT_RECALL: <0-100>
 SCORE: <0-100>
 VERDICT: <One sentence explanation>"""),
             ("human", f"""Context: {context_text}
@@ -233,25 +239,35 @@ Assistant Response: {llm_response}""")
 
         chain = prompt | eval_llm
         eval_result = chain.invoke({}).content
-        
-        # Parse result
-        score = 80.0; faith = 100.0; rel = 100.0; verdict = "OK"
-        
+
+        # Parse result with all 4 RAGAs metrics
+        score = 80.0
+        faith = 100.0
+        answer_rel = 100.0
+        context_prec = 100.0
+        context_rec = 100.0
+        verdict = "OK"
+
         try:
             for line in eval_result.split('\n'):
                 if 'FAITHFULNESS:' in line: faith = float(line.split(':')[1].strip())
-                if 'RELEVANCE:' in line: rel = float(line.split(':')[1].strip())
+                if 'ANSWER_RELEVANCE:' in line: answer_rel = float(line.split(':')[1].strip())
+                if 'CONTEXT_PRECISION:' in line: context_prec = float(line.split(':')[1].strip())
+                if 'CONTEXT_RECALL:' in line: context_rec = float(line.split(':')[1].strip())
+                if 'RELEVANCE:' in line and 'ANSWER_RELEVANCE:' not in line: answer_rel = float(line.split(':')[1].strip())
                 if 'SCORE:' in line: score = float(line.split(':')[1].strip())
-                if 'VERDICT:' in line: verdict = line.split(':')[1].strip()
+                if 'VERDICT:' in line: verdict = line.split(':', 1)[1].strip()
         except: pass
 
         # Update Session Metrics
-        session_metrics.add_eval(score, faith, rel)
+        session_metrics.add_eval(score, faith, answer_rel)
 
         return {
             "score": score,
             "faithfulness": faith,
-            "relevance": rel,
+            "answer_relevance": answer_rel,
+            "context_precision": context_prec,
+            "context_recall": context_rec,
             "verdict": verdict,
             "expected_answer": expected_answer,
             "timestamp": time.time()
@@ -469,10 +485,6 @@ async def query_ecu(request: QueryRequest):
         if langfuse_trace_id:
             logger.info(f"Langfuse trace ID: {langfuse_trace_id}")
 
-        detected_lines = [model_metadata.get("detected_product_line", "unknown")]
-        
-        logger.info(f"Retrieved {len(retrieved_docs)} docs, line(s): {detected_lines}")
-
         query_end = time.time()
         latency = query_end - query_start
 
@@ -481,22 +493,38 @@ async def query_ecu(request: QueryRequest):
         for doc in retrieved_docs:
             if not isinstance(doc, dict):
                 continue
-                
+
             metadata = doc.get("metadata", {})
             if not metadata:
                 continue
-                
+
             # Check common source keys
             source = metadata.get("source") or metadata.get("file_path") or metadata.get("filename")
-            
+
             if source:
                 # Get just the filename if it's a path
                 if isinstance(source, str):
                     source_name = Path(source).name
                     if source_name not in source_files and source_name != "Unknown":
                         source_files.append(source_name)
-        
+
         source_files = sorted(source_files)
+
+        # Detect product lines from model metadata
+        detected_lines = [model_metadata.get("detected_product_line", "unknown")]
+        logger.info(f"Model detected product lines: {detected_lines}")
+
+        logger.info(f"Retrieved {len(retrieved_docs)} docs, line(s): {detected_lines}")
+
+        # Determine if query is relevant to ECU products
+        # Query is irrelevant if product line detection failed (unknown)
+        # This indicates the query doesn't relate to any specific ECU product
+        is_relevant = True
+        if detected_lines == ["unknown"]:
+            is_relevant = False
+            logger.info(f"Query detected as irrelevant: product_line=unknown")
+        else:
+            logger.info(f"Query is relevant: detected product lines {detected_lines}")
 
         # Build real trace steps
         trace_steps = [
@@ -571,7 +599,8 @@ async def query_ecu(request: QueryRequest):
             rewritten_query=rewritten_query,
             timestamp=time.time(),
             trace_id=trace_id,
-            evaluation=evaluation
+            evaluation=evaluation,
+            is_relevant=is_relevant
         )
 
     except Exception as e:
