@@ -1,61 +1,61 @@
 #!/bin/bash
-# 本地开发环境启动脚本 - Linux/Mac
-# 用于前端开发，支持实时热重载
+# Local development environment startup script - Linux/Mac
+# For frontend development with real-time hot-reload
 
 set -e
 
 echo ""
 echo "========================================"
-echo "  ME ECU Assistant - 本地开发模式"
+echo "  ME ECU Assistant - Local Development Mode"
 echo "========================================"
 echo ""
 
-# 检查Python是否安装
+# Check if Python is installed
 if ! command -v python3 &> /dev/null; then
-    echo "❌ 错误: 未找到Python3，请先安装Python 3.11+"
+    echo "❌ Error: Python3 not found, please install Python 3.11+"
     exit 1
 fi
 
-echo "✅ Python环境检测通过"
+echo "✅ Python environment check passed"
 python3 --version
 echo ""
 
-# 检查是否在正确的目录
+# Check if in correct directory
 if [ ! -f "index.html" ]; then
-    echo "❌ 错误: 请在web目录下运行此脚本"
+    echo "❌ Error: Please run this script in the web directory"
     exit 1
 fi
 
-echo "✅ 工作目录: $(pwd)"
+echo "✅ Working directory: $(pwd)"
 echo ""
 
-# 检查依赖是否安装
-echo "🔍 检查依赖..."
+# Check if dependencies are installed
+echo "🔍 Checking dependencies..."
 if ! python3 -c "import fastapi" 2>/dev/null; then
-    echo "⚠️  依赖未安装，正在安装..."
+    echo "⚠️  Dependencies not installed, installing..."
     pip3 install -r requirements.txt
     if [ $? -ne 0 ]; then
-        echo "❌ 依赖安装失败"
+        echo "❌ Dependency installation failed"
         exit 1
     fi
-    echo "✅ 依赖安装完成"
+    echo "✅ Dependencies installed"
 else
-    echo "✅ 依赖已安装"
+    echo "✅ Dependencies already installed"
 fi
 
 echo ""
 echo "========================================"
-echo "  🚀 启动开发服务器"
+echo "  🚀 Starting Development Server"
 echo "========================================"
 echo ""
-echo "💡 使用提示:"
-echo "   - 服务地址: http://localhost:18500"
-echo "   - 修改 index.html 后刷新浏览器 (Cmd+R)"
-echo "   - 修改 Python 代码会自动重启服务器"
-echo "   - 按 Ctrl+C 停止服务器"
+echo "💡 Usage tips:"
+echo "   - Service URL: http://localhost:18500"
+echo "   - Refresh browser (Cmd+R) after modifying index.html"
+echo "   - Server auto-restarts on Python code changes"
+echo "   - Press Ctrl+C to stop the server"
 echo ""
 echo "========================================"
 echo ""
 
-# 启动开发服务器
+# Start development server
 python3 dev_server.py

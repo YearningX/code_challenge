@@ -78,6 +78,31 @@ class MLflowConfig:
 
 
 @dataclass
+class LangfuseConfig:
+    """
+    Configuration for Langfuse observability and tracing.
+
+    Langfuse provides detailed tracing for LLM applications including
+    LangGraph agents, with support for cost tracking and performance monitoring.
+    """
+    secret_key: str = None
+    public_key: str = None
+    base_url: str = "https://cloud.langfuse.com"  # Default cloud URL
+    enabled: bool = True
+    session_id: str = None  # Optional session ID for grouping traces
+    user_id: str = None  # Optional user ID for tracking
+    metadata: dict = None  # Optional metadata for traces
+
+    def __post_init__(self):
+        """Initialize default metadata if not provided."""
+        if self.metadata is None:
+            self.metadata = {
+                "project": "ME-ECU-Agent",
+                "version": "1.0.0"
+            }
+
+
+@dataclass
 class AgentConfig:
     """
     Master configuration class aggregating all subsystem configurations.
@@ -92,6 +117,7 @@ class AgentConfig:
     llm: LLMConfig = None
     performance: PerformanceConfig = None
     mlflow: MLflowConfig = None
+    langfuse: LangfuseConfig = None
 
     def __post_init__(self):
         """Initialize default configurations if not provided."""
@@ -105,3 +131,5 @@ class AgentConfig:
             self.performance = PerformanceConfig()
         if self.mlflow is None:
             self.mlflow = MLflowConfig()
+        if self.langfuse is None:
+            self.langfuse = LangfuseConfig()

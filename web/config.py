@@ -30,6 +30,11 @@ LANGCHAIN_API_KEY = os.getenv(
 LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT", "me-ecu-assistant-production")
 LANGCHAIN_ENDPOINT = os.getenv("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
 
+# Langfuse Tracing Configuration
+LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
+LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
+LANGFUSE_BASE_URL = os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent
 WEB_DIR = Path(__file__).parent
@@ -46,4 +51,8 @@ print(f"LangSmith Tracing: {LANGCHAIN_TRACING_V2}")
 if LANGCHAIN_TRACING_V2:
     print(f"LangSmith Project: {LANGCHAIN_PROJECT}")
     print(f"LangSmith API Key: {LANGCHAIN_API_KEY[:20]}...")
+print(f"Langfuse Tracing: {bool(LANGFUSE_SECRET_KEY and LANGFUSE_PUBLIC_KEY)}")
+if LANGFUSE_SECRET_KEY and LANGFUSE_PUBLIC_KEY:
+    print(f"Langfuse Base URL: {LANGFUSE_BASE_URL}")
+    print(f"Langfuse Public Key: {LANGFUSE_PUBLIC_KEY[:20]}...")
 print("=" * 60)

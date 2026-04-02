@@ -1,8 +1,8 @@
-# Docker Compose - 开发模式配置
-# 用于前端开发时无需重新构建镜像
+# Docker Compose - Development Mode Configuration
+# For frontend development without rebuilding images
 
 services:
-  # ME ECU Assistant API Server - 开发模式
+  # ME ECU Assistant API Server - Development Mode
   ecu-assistant-api:
     build:
       context: .
@@ -26,16 +26,16 @@ services:
       - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-me-ecu-assistant-dev}
       - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
     volumes:
-      # 🔥 开发模式：挂载所有前端文件，修改实时生效
+      # 🔥 Development mode: Mount all frontend files for real-time updates
       - ./index.html:/app/index.html:ro
       - ./BOSCH_LOGO.png:/app/BOSCH_LOGO.png:ro
 
-      # 数据目录挂载
+      # Data directory mounts
       - ../mlruns:/app/mlruns:ro
       - ../data:/app/data:ro
       - ../models:/app/models:ro
 
-      # 🔥 开发模式：挂载Python源码（可选，用于后端调试）
+      # 🔥 Development mode: Mount Python source code (optional, for backend debugging)
       # - ./api_server.py:/app/api_server.py:ro
       # - ./config.py:/app/config.py:ro
     networks:

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # ME ECU Assistant API Server
   ecu-assistant-api:
@@ -15,6 +13,15 @@ services:
       - API_PORT=18500
       - API_RELOAD=false
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Langfuse Configuration (hardcoded for Windows compatibility)
+      - LANGFUSE_SECRET_KEY=sk-lf-80d2f119-e37d-474b-abbf-07cdca6bf5b4
+      - LANGFUSE_PUBLIC_KEY=pk-lf-bfcc44a5-129e-4874-af0a-6cd602d6bc71
+      - LANGFUSE_BASE_URL=https://langfuse.cccoder.top
+      # LangSmith Configuration (optional)
+      - LANGCHAIN_TRACING_V2=true
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY:-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}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-me-ecu-assistant-production}
+      - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
     volumes:
       # Mount MLflow runs directory from host
       - ../mlruns:/app/mlruns:ro
@@ -25,6 +32,7 @@ services:
       # Mount source code for development (optional)
       - ./api_server.py:/app/api_server.py:ro
       - ./config.py:/app/config.py:ro
+      - ./index.html:/app/index.html:ro
       - ./BOSCH_LOGO.png:/app/BOSCH_LOGO.png:ro
     networks:
       - ecu-assistant-network

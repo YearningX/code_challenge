@@ -1,8 +1,8 @@
-# 🚀 快速参考 - ME ECU Assistant 开发模式
+# 🚀 Quick Reference - ME ECU Assistant Development Mode
 
-## ⚡ 三种启动方式
+## ⚡ Three Startup Methods
 
-### 1️⃣ 本地开发模式（推荐）⭐
+### 1️⃣ Local Development Mode (Recommended) ⭐
 
 ```bash
 # Windows
@@ -12,127 +12,96 @@ start-dev.bat
 chmod +x start-dev.sh
 ./start-dev.sh
 
-# 或直接运行
+# Or run directly
 python dev_server.py
 ```
 
-**特点：**
-- ✅ 修改 `index.html` 后刷新浏览器即可
-- ✅ 修改 Python 代码自动重启
-- ✅ 无需Docker，快速开发
+**Features:**
+- ✅ Refresh browser after modifying `index.html`
+- ✅ Auto-restart on Python code changes
+- ✅ No Docker needed, fast development
 
 ---
 
-### 2️⃣ Docker开发模式
+### 2️⃣ Docker Development Mode
 
 ```bash
-# 启动开发模式容器
+# Start development container
 docker-compose -f docker-compose-dev.yml up
 
-# 后台运行
+# Run in background
 docker-compose -f docker-compose-dev.yml up -d
 
-# 停止
+# Stop
 docker-compose -f docker-compose-dev.yml down
 ```
 
-**特点：**
-- ✅ 前端文件通过volume挂载，修改实时生效
-- ✅ 容器化环境，与生产一致
-- ⚠️ 需要Docker环境
+**Features:**
+- ✅ Frontend files mounted via volume, real-time updates
+- ✅ Containerized environment, consistent with production
+- ⚠️ Requires Docker environment
 
 ---
 
-### 3️⃣ Docker生产模式
+### 3️⃣ Docker Production Mode
 
 ```bash
-# 构建并启动
+# Build and start
 docker-compose up -d
 
-# 重新构建（修改前端后）
+# Rebuild (after frontend changes)
 docker-compose build && docker-compose up -d
 ```
 
-**特点：**
-- ✅ 生产环境部署
-- ⚠️ 修改前端需要重新构建镜像
+**Features:**
+- ✅ Production deployment
+- ⚠️ Requires rebuilding image after frontend changes
 
 ---
 
-## 📝 常用操作
+## 📝 Common Operations
 
-### 修改前端界面
+### Modify Frontend Interface
 
 ```bash
-# 1. 启动开发模式
+# 1. Start development mode
 python dev_server.py
 
-# 2. 打开浏览器
+# 2. Open browser
 http://localhost:18500
 
-# 3. 编辑 index.html
+# 3. Edit index.html
 
-# 4. 保存并刷新浏览器 (F5)
+# 4. Save and refresh browser (F5)
 ```
 
-### 修改后端API
+### Modify Backend API
 
 ```bash
-# 1. 启动开发模式（自动热重载）
+# 1. Start development mode (auto hot-reload)
 python dev_server.py
 
-# 2. 编辑 api_server.py
+# 2. Edit api_server.py
 
-# 3. 保存（自动重启）
+# 3. Save (auto-restart)
 ```
 
-### 查看日志
+### View Logs
 
 ```bash
-# 本地模式
+# Local mode
 python dev_server.py
-# 日志直接显示在控制台
+# Logs displayed directly in console
 
-# Docker模式
+# Docker mode
 docker-compose logs -f ecu-assistant-api
 ```
 
 ---
 
-## 🔍 调试技巧
+## 🔍 Troubleshooting
 
-### 前端调试
-1. 打开浏览器开发者工具 (F12)
-2. Console查看JavaScript错误
-3. Network查看API请求
-4. Elements实时修改CSS测试
-
-### 后端调试
-1. 查看 `dev_server.py` 控制台输出
-2. 访问 `/api/dev/status` 检查状态
-3. 使用 `print()` 输出调试信息
-
-### 清除缓存
-```
-浏览器硬刷新: Ctrl+Shift+R (Windows)
-             Cmd+Shift+R (Mac)
-```
-
----
-
-## 📊 性能对比
-
-| 模式 | 启动时间 | 前端修改生效 | 后端修改生效 | 适用场景 |
-|------|----------|-------------|-------------|----------|
-| 本地开发 | ~5s | ⚡ 即时 | ⚡ 自动 | 日常开发 |
-| Docker开发 | ~30s | ⚡ 即时 | 🔄 重启容器 | 集成测试 |
-| Docker生产 | ~30s | 🔨 重新构建 | 🔨 重新构建 | 生产部署 |
-
----
-
-## 🆘 故障排除
-
-### 端口被占用
+### Port Already in Use
 ```bash
 # Windows
 netstat -ano | findstr :18500
@@ -141,31 +110,63 @@ taskkill /PID <PID> /F
 # Linux/Mac
 lsof -ti:18500 | xargs kill -9
 
-# 或修改端口
-# 编辑 dev_server.py 中的 DEV_CONFIG["port"]
+# Or change port
+# Edit dev_server.py DEV_CONFIG["port"]
 ```
 
-### 依赖缺失
+### Missing Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 模型加载失败
+### Model Loading Failed
 ```bash
-# 检查MLflow模型路径
+# Check MLflow model path
 ls ../models/ecu_agent_model_local/ecu_agent_model
 
-# 或修改模型路径
-# 编辑 config.py 中的 MODEL_URI
+# Or modify model path
+# Edit config.py MODEL_URI
 ```
 
 ---
 
-## 📞 获取帮助
+## 📊 Performance Comparison
 
-- 📖 详细文档：`DEV-GUIDE.md`
-- 🐳 Docker文档：`DOCKER-DEPLOYMENT.md`
-- 📋 项目README：`README.md`
+| Mode | Startup Time | Frontend Update | Backend Update | Use Case |
+|------|-------------|----------------|----------------|----------|
+| Local Dev | ~5s | ⚡ Instant | ⚡ Auto | Daily development |
+| Docker Dev | ~30s | ⚡ Instant | 🔄 Restart container | Integration testing |
+| Docker Prod | ~30s | 🔨 Rebuild | 🔨 Rebuild | Production deployment |
+
+---
+
+## 🆘 Troubleshooting
+
+### Frontend Errors
+1. Open DevTools (F12)
+2. Check Console for JavaScript errors
+3. Check Network tab for failed requests
+
+### Backend Errors
+1. Check console output in local mode
+2. Check `/api/dev/status` for development status
+3. Use `print()` for debugging information
+
+### Clear Cache
+```
+Browser hard refresh: Ctrl+Shift+R (Windows)
+                     Cmd+Shift+R (Mac)
+```
+
+---
+
+## 🔗 Related Files
+
+- 📖 `DEV-GUIDE.md` - Comprehensive development guide
+- 🐳 `docker-compose.yml` - Docker configuration
+- 🐳 `docker-compose-dev.yml` - Development Docker configuration
+- ⚙️ `config.py` - Application configuration
+- 📝 `README.md` - Project overview
 
 ---
 

@@ -1,18 +1,20 @@
 """
-LangGraph Agent Module - OPTIMIZED VERSION with LangSmith Tracing
+LangGraph Agent Module - OPTIMIZED VERSION with LangSmith Tracing and Langfuse Integration
 """
 
 import os
-from typing import List, Literal, Optional, TypedDict
+import time
+from typing import List, Literal, Optional, TypedDict, Dict, Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.vectorstores import VectorStoreRetriever
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
-from me_ecu_agent.config import LLMConfig
+from me_ecu_agent.config import LLMConfig, LangfuseConfig
 from me_ecu_agent.query_expansion import create_query_expander
 from me_ecu_agent.hyde_retriever import create_hyde_retriever
 from me_ecu_agent.hybrid_retrieval import create_hybrid_retriever
+from me_ecu_agent.langfuse_integration import initialize_langfuse
 
 # Import LangSmith callback for tracing
 try:
@@ -35,11 +37,48 @@ class AgentState(TypedDict):
 
 
 class ECUQueryAgent:
-    """Enhanced with HyDE (Hypothetical Document Embeddings)."""
+    """Enhanced with HyDE (Hypothetical Document Embeddings) and Langfuse Tracing."""
 
-    def __init__(self, config: LLMConfig = None):
+    def __init__(self, config: LLMConfig = None, langfuse_config: LangfuseConfig = None):
         self.config = config or LLMConfig()
+        self.langfuse_config = langfuse_config or LangfuseConfig()
+
+        # Initialize LLM
         self.llm = ChatOpenAI(model=self.config.model_name, temperature=self.config.temperature)
+
+        # Initialize Langfuse if enabled
+        self.langfuse = None
+        self.langfuse_enabled = False
+
+        print(f"\n{'='*60}")
+        print(f"ECUQueryAgent - Langfuse Configuration")
+        print(f"{'='*60}")
+        print(f"Config enabled: {self.langfuse_config.enabled}")
+        print(f"Secret Key: {self.langfuse_config.secret_key[:20] if self.langfuse_config.secret_key else None}...")
+        print(f"Public Key: {self.langfuse_config.public_key[:20] if self.langfuse_config.public_key else None}...")
+        print(f"Base URL: {self.langfuse_config.base_url}")
+
+        if self.langfuse_config.enabled:
+            try:
+                print("Attempting to initialize Langfuse...")
+                self.langfuse = initialize_langfuse(
+                    secret_key=self.langfuse_config.secret_key,
+                    public_key=self.langfuse_config.public_key,
+                    base_url=self.langfuse_config.base_url
+                )
+                self.langfuse_enabled = self.langfuse.enabled if self.langfuse else False
+                if self.langfuse_enabled:
+                    print("✓ Langfuse tracing initialized successfully")
+                else:
+                    print("✗ Langfuse initialized but not enabled")
+            except Exception as e:
+                print(f"✗ Failed to initialize Langfuse: {e}")
+        else:
+            print("Langfuse disabled in configuration")
+        print(f"Final langfuse_enabled: {self.langfuse_enabled}")
+        print(f"{'='*60}\n")
+
+        # Initialize query expander and retrievers
         self.query_expander = create_query_expander()
         self.ecu700_retriever: Optional[VectorStoreRetriever] = None
         self.ecu800_retriever: Optional[VectorStoreRetriever] = None
@@ -157,36 +196,43 @@ class ECUQueryAgent:
         return state
 
     def _parallel_retrieval(self, state: AgentState) -> AgentState:
-        contexts = []
-        final_docs_list = []
-        seen_content = set()
         queries = state["rewritten_query"] if isinstance(state["rewritten_query"], list) else [state["query"]]
+        final_docs_list = []
+        contexts = []
+        seen_content = set()
+        
+        print(f"DEBUG: Parallel retrieval started for product_line={state['detected_product_line']}, queries={queries}")
 
         if self.ecu700_retriever is not None:
             docs_700 = []
             for q in queries:
+                print(f"DEBUG: Invoking ECU700 retriever for: {q}")
                 res = self.ecu700_retriever.invoke(q)
+                print(f"DEBUG: ECU700 retriever returned {len(res)} results")
                 for doc in res:
                     if doc.page_content not in seen_content:
                         docs_700.append(doc)
                         seen_content.add(doc.page_content)
             final_docs_list.extend([{"content": doc.page_content, "metadata": doc.metadata} for doc in docs_700])
-            contexts.append(" ".join([f"[ECU-700]{doc.page_content}" for doc in docs_700]))
+            contexts.append(" ".join([f"[ECU-700: {doc.metadata.get('source', 'U')}]{doc.page_content}" for doc in docs_700]))
             
         if self.ecu800_retriever is not None:
             docs_800 = []
             for q in queries:
+                print(f"DEBUG: Invoking ECU800 retriever for: {q}")
                 res = self.ecu800_retriever.invoke(q)
+                print(f"DEBUG: ECU800 retriever returned {len(res)} results")
                 for doc in res:
                     if doc.page_content not in seen_content:
                         docs_800.append(doc)
                         seen_content.add(doc.page_content)
             final_docs_list.extend([{"content": doc.page_content, "metadata": doc.metadata} for doc in docs_800])
-            contexts.append(" ".join([f"[ECU-800]{doc.page_content}" for doc in docs_800]))
+            contexts.append(" ".join([f"[ECU-800: {doc.metadata.get('source', 'U')}]{doc.page_content}" for doc in docs_800]))
             
+        print(f"DEBUG: Parallel retrieval complete. Total unique docs: {len(final_docs_list)}")
         state["retrieved_docs"] = final_docs_list
         state["retrieved_context"] = " ".join(contexts)
-        state["messages"].append(AIMessage(content=f"Parallel retrieval complete: {len(final_docs_list)} docs"))
+        state["messages"].append(AIMessage(content=f"Parallel retrieval complete: {len(final_docs_list)} docs retrieved from documentation"))
         return state
 
     def _synthesize_response(self, state: AgentState) -> AgentState:
@@ -223,33 +269,122 @@ class ECUQueryAgent:
         workflow.add_edge("synthesize_response", END)
         return workflow.compile()
 
-    def invoke(self, query: str) -> dict:
+    def invoke(self, query: str, session_id: str = None, user_id: str = None) -> dict:
+        """
+        Invoke the ECU agent with Langfuse tracing.
+
+        Args:
+            query: User query string
+            session_id: Optional session ID for grouping traces
+            user_id: Optional user ID for tracking
+
+        Returns:
+            Dictionary containing response and metadata including trace_id
+        """
         if self.ecu700_retriever is None and self.ecu800_retriever is None:
             raise ValueError("At least one retriever must be registered")
-        graph = self.create_graph()
-        initial_state = AgentState(
-            query=query,
-            rewritten_query="",
-            detected_product_line="unknown",
-            retrieved_context="",
-            retrieved_docs=[],
-            response="",
-            messages=[HumanMessage(content=query)]
-        )
-        result = graph.invoke(initial_state)
-        # OPTIMIZED: Balanced synthesis prompt - relevant but complete
-        self.response_synthesis_prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a Bosch ECU technical assistant. " +
-             "CRITICAL INSTRUCTIONS: " +
-             "1. Always specify exact model names (ECU-750/850/850b). " +
-             "2. Answer using RELEVANT information from context (don't include unrelated specs). " +
-             "3. COMPREHENSIVENESS for the asked question: " +
-             "   - For 'which models support X': List both supported AND unsupported models. " +
-             "   - For 'compare all': Provide info for each relevant model. " +
-             "   - For specs with multiple states (idle/load, min/max): Include ALL states. " +
-             "4. Use exact numbers and units from context. " +
-             "5. Only use provided information - do not hallucinate. " +
-             "Context: {context}."),
-            ("human", "{query}")
-        ])
-        return result
+
+        # Start Langfuse trace
+        trace = None
+        trace_id = None
+        start_time = time.time()
+
+        if self.langfuse_enabled and self.langfuse:
+            try:
+                trace = self.langfuse.client.trace(
+                    name="ecu_agent_query",
+                    input={"query": query},  # Set input properly
+                    session_id=session_id or self.langfuse_config.session_id,
+                    user_id=user_id or self.langfuse_config.user_id,
+                    metadata={
+                        **(self.langfuse_config.metadata or {}),
+                    }
+                )
+                trace_id = trace.id if trace else None  # Langfuse 2.x uses 'id' attribute
+            except Exception as e:
+                print(f"Error creating Langfuse trace: {e}")
+                trace = None
+
+        try:
+            # Create and invoke graph
+            graph = self.create_graph()
+            initial_state = AgentState(
+                query=query,
+                rewritten_query="",
+                detected_product_line="unknown",
+                retrieved_context="",
+                retrieved_docs=[],
+                response="",
+                messages=[HumanMessage(content=query)]
+            )
+
+            # Create execution span if trace exists
+            span = None
+            if trace:
+                try:
+                    span = trace.span(
+                        name="graph_execution",
+                        input={"query": query}
+                    )
+                except Exception as e:
+                    print(f"Error creating span: {e}")
+
+            # Invoke graph
+            result = graph.invoke(initial_state)
+
+            # Calculate total duration
+            duration = time.time() - start_time
+
+            # Update span with results
+            if span:
+                try:
+                    span.update(
+                        output={
+                            "response": result.get("response", "")[:500],
+                            "detected_product_line": result.get("detected_product_line"),
+                            "retrieved_docs_count": len(result.get("retrieved_docs", [])),
+                            "duration_seconds": round(duration, 2)
+                        },
+                        end_time=start_time + duration
+                    )
+                    span.end()
+                except Exception as e:
+                    print(f"Error updating span: {e}")
+
+            # Update trace with final results
+            if trace:
+                try:
+                    trace.update(
+                        output={
+                            "response": result.get("response", "")[:1000],
+                            "detected_product_line": result.get("detected_product_line"),
+                            "retrieved_docs_count": len(result.get("retrieved_docs", [])),
+                            "duration_seconds": round(duration, 2)
+                        },
+                        level="DEFAULT",
+                        status_message="Success",
+                        end_time=start_time + duration
+                    )
+                except Exception as e:
+                    print(f"Error updating Langfuse trace: {e}")
+
+            # Add trace_id to result
+            result["trace_id"] = trace_id
+            result["langfuse_enabled"] = self.langfuse_enabled
+            result["duration"] = duration
+
+            return result
+
+        except Exception as e:
+            # Update trace with error
+            if trace:
+                try:
+                    trace.update(
+                        level="ERROR",
+                        status_message=str(e)
+                    )
+                except:
+                    pass
+
+            # Re-raise the exception
+            raise

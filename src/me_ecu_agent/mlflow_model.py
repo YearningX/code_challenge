@@ -15,6 +15,7 @@ Features:
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Union
 
 import mlflow
@@ -22,7 +23,7 @@ import pandas as pd
 from langchain_core.messages import HumanMessage
 from mlflow.pyfunc import PythonModel
 
-from me_ecu_agent.config import LLMConfig, PerformanceConfig, RetrievalConfig
+from me_ecu_agent.config import LLMConfig, PerformanceConfig, RetrievalConfig, LangfuseConfig
 
 
 # Configure logging
@@ -49,6 +50,7 @@ class ECUAgentMLflowModel(PythonModel):
         self.config = LLMConfig()
         self.perf_config = PerformanceConfig()
         self.retrieval_config = RetrievalConfig()
+        self.langfuse_config = None
 
     def load_context(self, context) -> None:
         """
@@ -70,6 +72,39 @@ class ECUAgentMLflowModel(PythonModel):
             # Import here to avoid serialization issues
             from me_ecu_agent.vectorstore import load_vector_stores
             from me_ecu_agent.graph import ECUQueryAgent
+            from me_ecu_agent.langfuse_integration import initialize_langfuse
+
+            # Initialize Langfuse if credentials are available
+            logger.info("Initializing Langfuse integration...")
+            self.langfuse_config = LangfuseConfig(
+                secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+                public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+                base_url=os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com"),
+                enabled=True
+            )
+
+            # Test Langfuse connection
+            try:
+                logger.info(f"Attempting to initialize Langfuse...")
+                logger.info(f"  Secret Key: {self.langfuse_config.secret_key[:20] if self.langfuse_config.secret_key else None}...")
+                logger.info(f"  Public Key: {self.langfuse_config.public_key[:20] if self.langfuse_config.public_key else None}...")
+                logger.info(f"  Base URL: {self.langfuse_config.base_url}")
+                logger.info(f"  Enabled: {self.langfuse_config.enabled}")
+
+                langfuse = initialize_langfuse(
+                    secret_key=self.langfuse_config.secret_key,
+                    public_key=self.langfuse_config.public_key,
+                    base_url=self.langfuse_config.base_url
+                )
+                if langfuse.enabled:
+                    logger.info("✓ Langfuse integration enabled successfully")
+                    logger.info(f"  Base URL: {self.langfuse_config.base_url}")
+                else:
+                    logger.warning("Langfuse integration initialized but not enabled")
+                    self.langfuse_config.enabled = False
+            except Exception as e:
+                logger.error(f"Failed to initialize Langfuse: {e}", exc_info=True)
+                self.langfuse_config.enabled = False
 
             # Load vector stores from artifacts
             vector_store_dir = context.artifacts.get("vector_stores")
@@ -106,7 +141,15 @@ class ECUAgentMLflowModel(PythonModel):
 
             # Create agent and register retrievers
             logger.info("Creating ECU Query Agent...")
-            self.agent = ECUQueryAgent(config=self.config)
+            self.agent = ECUQueryAgent(
+                config=self.config,
+                langfuse_config=self.langfuse_config
+            )
+
+            if self.agent.langfuse_enabled:
+                logger.info("✓ Agent initialized with Langfuse tracing")
+            else:
+                logger.info("Agent initialized without Langfuse tracing")
 
             if store_700:
                 retriever_700 = store_700.as_retriever(
@@ -220,12 +263,14 @@ class ECUAgentMLflowModel(PythonModel):
 
         return queries
 
-    def _execute_query(self, query: str) -> Dict[str, Any]:
+    def _execute_query(self, query: str, session_id: str = None, user_id: str = None) -> Dict[str, Any]:
         """
         Execute a single query through the LangGraph agent.
 
         Args:
             query: Validated query string
+            session_id: Optional session ID for Langfuse grouping
+            user_id: Optional user ID for Langfuse tracking
 
         Returns:
             Dictionary containing response and metadata
@@ -233,36 +278,42 @@ class ECUAgentMLflowModel(PythonModel):
         start_time = time.time()
 
         try:
-            # Prepare initial state with all required fields
-            initial_state = {
-                "query": query,
-                "detected_product_line": "unknown",
-                "retrieved_context": "",
-                "response": "",
-                "messages": [HumanMessage(content=query)]
-            }
+            # Use agent.invoke() instead of graph.invoke() to get Langfuse tracing
+            logger.info(f"Executing query via agent.invoke() for Langfuse tracing...")
 
-            # Execute graph
-            result = self.graph.invoke(initial_state)
+            # The agent.invoke() method creates Langfuse traces internally
+            result = self.agent.invoke(
+                query=query,
+                session_id=session_id,
+                user_id=user_id
+            )
 
-            # Extract response
-            last_message = result.get("messages", [])[-1]
-            response = last_message.content if last_message else result.get("response", "")
+            # Extract response from result
+            response = result.get("response", "")
+
+            # Extract trace_id if Langfuse is enabled
+            trace_id = result.get("trace_id")
+            langfuse_enabled = result.get("langfuse_enabled", False)
+
+            if trace_id:
+                logger.info(f"Langfuse trace ID: {trace_id}")
 
             # Calculate latency
-            latency = time.time() - start_time
+            latency = result.get("duration", time.time() - start_time)
 
             logger.info(f"Query executed successfully in {latency:.2f}s: {query[:50]}...")
 
             return {
                 "response": response,
                 "query": query,
-                "rewritten_query": result.get("rewritten_query", ""),
+                "rewritten_query": result.get("rewritten_query", query),
                 "detected_product_line": result.get("detected_product_line", "unknown"),
                 "retrieved_docs": result.get("retrieved_docs", []),
                 "status": "success",
                 "latency_seconds": round(latency, 2),
-                "error": None
+                "error": None,
+                "trace_id": trace_id,
+                "langfuse_enabled": langfuse_enabled
             }
 
         except Exception as e:
@@ -275,7 +326,9 @@ class ECUAgentMLflowModel(PythonModel):
                 "query": query,
                 "status": "error",
                 "latency_seconds": round(latency, 2),
-                "error": str(e)
+                "error": str(e),
+                "trace_id": None,
+                "langfuse_enabled": False
             }
 
     def predict(self, context, model_input: Any) -> Union[List[str], List[Dict[str, Any]]]:
@@ -289,7 +342,7 @@ class ECUAgentMLflowModel(PythonModel):
         Returns:
             List of responses (simple) or list of result dictionaries (detailed)
         """
-        if self.graph is None:
+        if self.agent is None:
             raise RuntimeError("Model not loaded. Call load_context() first.")
 
         logger.info(f"Processing {type(model_input).__name__} input...")
@@ -312,13 +365,26 @@ class ECUAgentMLflowModel(PythonModel):
                         "query": str(query),
                         "status": "validation_error",
                         "latency_seconds": 0,
-                        "error": str(e)
+                        "error": str(e),
+                        "trace_id": None,
+                        "langfuse_enabled": False
                     }]
+
+            # Generate session and user IDs for this batch
+            import uuid
+            session_id = f"session_{uuid.uuid4().hex[:8]}"
+            user_id = f"user_{uuid.uuid4().hex[:8]}"
 
             # Execute queries (batch processing with error isolation)
             results = []
-            for query in validated_queries:
-                result = self._execute_query(query)
+            for i, query in enumerate(validated_queries):
+                # Use unique session/user ID per query to avoid grouping
+                query_session_id = f"{session_id}_q{i}"
+                result = self._execute_query(
+                    query=query,
+                    session_id=query_session_id,
+                    user_id=user_id
+                )
                 results.append(result)
 
             # Always return the full detailed results to include metadata
