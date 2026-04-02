@@ -1,5 +1,5 @@
 """
-LangGraph Agent Module - OPTIMIZED VERSION with LangSmith Tracing and Langfuse Integration
+LangGraph Agent Module - OPTIMIZED VERSION with Langfuse Integration
 """
 
 import os
@@ -15,15 +15,6 @@ from me_ecu_agent.query_expansion import create_query_expander
 from me_ecu_agent.hyde_retriever import create_hyde_retriever
 from me_ecu_agent.hybrid_retrieval import create_hybrid_retriever
 from me_ecu_agent.langfuse_integration import initialize_langfuse
-
-# Import LangSmith callback for tracing
-try:
-    from langchain.callbacks import LangChainTracer
-    from langchain.smith import run_on_dataset
-    LANGSMITH_AVAILABLE = True
-except ImportError:
-    LANGSMITH_AVAILABLE = False
-    print("Warning: LangSmith not available. Tracing disabled.")
 
 
 class AgentState(TypedDict):

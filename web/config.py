@@ -21,15 +21,6 @@ HOST = os.getenv("API_HOST", "0.0.0.0")
 PORT = int(os.getenv("API_PORT", "18500"))
 RELOAD = os.getenv("API_RELOAD", "true").lower() == "true"
 
-# LangSmith Tracing Configuration
-LANGCHAIN_TRACING_V2 = os.getenv("LANGCHAIN_TRACING_V2", "true").lower() == "true"
-LANGCHAIN_API_KEY = os.getenv(
-    "LANGCHAIN_API_KEY",
-    "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"
-)
-LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT", "me-ecu-assistant-production")
-LANGCHAIN_ENDPOINT = os.getenv("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
-
 # Langfuse Tracing Configuration
 LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
 LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
@@ -47,10 +38,6 @@ print("=" * 60)
 print(f"Model URI: {MODEL_URI}")
 print(f"Server: {HOST}:{PORT}")
 print(f"Reload: {RELOAD}")
-print(f"LangSmith Tracing: {LANGCHAIN_TRACING_V2}")
-if LANGCHAIN_TRACING_V2:
-    print(f"LangSmith Project: {LANGCHAIN_PROJECT}")
-    print(f"LangSmith API Key: {LANGCHAIN_API_KEY[:20]}...")
 print(f"Langfuse Tracing: {bool(LANGFUSE_SECRET_KEY and LANGFUSE_PUBLIC_KEY)}")
 if LANGFUSE_SECRET_KEY and LANGFUSE_PUBLIC_KEY:
     print(f"Langfuse Base URL: {LANGFUSE_BASE_URL}")

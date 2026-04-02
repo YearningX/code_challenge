@@ -62,13 +62,6 @@ class ECUAgentMLflowModel(PythonModel):
         try:
             logger.info("Loading ECU Agent model context...")
 
-            # Setup LangSmith tracing if environment variables are set
-            if os.getenv("LANGCHAIN_TRACING_V2") == "true":
-                logger.info("LangSmith tracing is enabled via environment variables")
-                logger.info(f"Project: {os.getenv('LANGCHAIN_PROJECT', 'default')}")
-            else:
-                logger.warning("LangSmith tracing not enabled (LANGCHAIN_TRACING_V2 not set to 'true')")
-
             # Import here to avoid serialization issues
             from me_ecu_agent.vectorstore import load_vector_stores
             from me_ecu_agent.graph import ECUQueryAgent

@@ -4,7 +4,7 @@ FastAPI Backend Server for ME ECU Engineering Assistant
 Production-ready API server with CORS support, error handling,
 and performance monitoring.
 
-Enhanced with LangSmith tracing for agent execution visualization.
+Enhanced with Langfuse tracing for agent execution visualization.
 """
 
 import logging
@@ -37,8 +37,6 @@ ecu_agent_model = None
 try:
     from config import (
         MODEL_URI, HOST, PORT, RELOAD,
-        LANGCHAIN_TRACING_V2, LANGCHAIN_API_KEY,
-        LANGCHAIN_PROJECT, LANGCHAIN_ENDPOINT,
         LANGFUSE_SECRET_KEY, LANGFUSE_PUBLIC_KEY, LANGFUSE_BASE_URL
     )
 except ImportError:
@@ -46,10 +44,6 @@ except ImportError:
     HOST = "0.0.0.0"
     PORT = 18500
     RELOAD = True
-    LANGCHAIN_TRACING_V2 = False
-    LANGCHAIN_API_KEY = None
-    LANGCHAIN_PROJECT = None
-    LANGCHAIN_ENDPOINT = None
     LANGFUSE_SECRET_KEY = None
     LANGFUSE_PUBLIC_KEY = None
     LANGFUSE_BASE_URL = None
@@ -119,17 +113,6 @@ class SessionMetrics:
             }
 
 session_metrics = SessionMetrics()
-
-# Setup LangSmith tracing if enabled
-if LANGCHAIN_TRACING_V2 and LANGCHAIN_API_KEY:
-    os.environ["LANGCHAIN_TRACING_V2"] = "true"
-    os.environ["LANGCHAIN_API_KEY"] = LANGCHAIN_API_KEY
-    os.environ["LANGCHAIN_PROJECT"] = LANGCHAIN_PROJECT
-    os.environ["LANGCHAIN_ENDPOINT"] = LANGCHAIN_ENDPOINT
-    logger.info("LangSmith tracing enabled")
-    logger.info(f"Project: {LANGCHAIN_PROJECT}")
-else:
-    logger.warning("LangSmith tracing disabled")
 
 # Source file map for documentation endpoints
 # Dynamically load all markdown files from data directory
@@ -206,7 +189,6 @@ class TraceResponse(BaseModel):
     query: str = Field(..., description="Original query")
     total_duration: float = Field(..., description="Total execution time in seconds")
     steps: List[TraceStep] = Field(..., description="Execution steps")
-    langsmith_url: Optional[str] = Field(None, description="LangSmith trace URL if available")
     langfuse_url: Optional[str] = Field(None, description="Langfuse trace URL if available")
     langfuse_trace_id: Optional[str] = Field(None, description="Langfuse trace ID for reference")
 
@@ -773,11 +755,6 @@ async def get_trace(trace_id: str):
         for step in trace_data["steps"]
     ]
 
-    # Generate LangSmith URL if enabled
-    langsmith_url = None
-    if LANGCHAIN_TRACING_V2 and LANGCHAIN_PROJECT:
-        langsmith_url = f"https://smith.langchain.com/projects/{LANGCHAIN_PROJECT}"
-
     # Generate Langfuse URL if enabled
     langfuse_url = None
     langfuse_trace_id = trace_data.get("langfuse_trace_id")
@@ -797,7 +774,6 @@ async def get_trace(trace_id: str):
         query=trace_data["query"],
         total_duration=trace_data["total_duration"],
         steps=steps,
-        langsmith_url=langsmith_url,
         langfuse_url=langfuse_url,
         langfuse_trace_id=langfuse_trace_id
     )
