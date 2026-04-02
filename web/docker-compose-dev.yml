@@ -1,0 +1,62 @@
+# Docker Compose - 开发模式配置
+# 用于前端开发时无需重新构建镜像
+
+services:
+  # ME ECU Assistant API Server - 开发模式
+  ecu-assistant-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ecu-assistant-api-dev
+    ports:
+      - "18500:18500"
+    environment:
+      - MLFLOW_MODEL_URI=/app/models/ecu_agent_model_local/ecu_agent_model
+      - API_HOST=0.0.0.0
+      - API_PORT=18500
+      - API_RELOAD=false
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Langfuse Configuration
+      - LANGFUSE_SECRET_KEY=sk-lf-80d2f119-e37d-474b-abbf-07cdca6bf5b4
+      - LANGFUSE_PUBLIC_KEY=pk-lf-bfcc44a5-129e-4874-af0a-6cd602d6bc71
+      - LANGFUSE_BASE_URL=https://langfuse.cccoder.top
+      # LangSmith Configuration
+      - LANGCHAIN_TRACING_V2=true
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY:-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}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-me-ecu-assistant-dev}
+      - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
+    volumes:
+      # 🔥 开发模式：挂载所有前端文件，修改实时生效
+      - ./index.html:/app/index.html:ro
+      - ./BOSCH_LOGO.png:/app/BOSCH_LOGO.png:ro
+
+      # 数据目录挂载
+      - ../mlruns:/app/mlruns:ro
+      - ../data:/app/data:ro
+      - ../models:/app/models:ro
+
+      # 🔥 开发模式：挂载Python源码（可选，用于后端调试）
+      # - ./api_server.py:/app/api_server.py:ro
+      # - ./config.py:/app/config.py:ro
+    networks:
+      - ecu-assistant-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18500/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "com.ecu-assistant.description=ME ECU Assistant - Development Mode"
+      - "com.ecu-assistant.mode=development"
+      - "com.ecu-assistant.hot-reload=true"
+
+networks:
+  ecu-assistant-network:
+    driver: bridge
+    name: ecu-assistant-network
+
+volumes:
+  mlflow-data:
+    driver: local

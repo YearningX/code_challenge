@@ -38,7 +38,8 @@ try:
     from config import (
         MODEL_URI, HOST, PORT, RELOAD,
         LANGCHAIN_TRACING_V2, LANGCHAIN_API_KEY,
-        LANGCHAIN_PROJECT, LANGCHAIN_ENDPOINT
+        LANGCHAIN_PROJECT, LANGCHAIN_ENDPOINT,
+        LANGFUSE_SECRET_KEY, LANGFUSE_PUBLIC_KEY, LANGFUSE_BASE_URL
     )
 except ImportError:
     MODEL_URI = "runs:/20f8fa846aea4dd183fa8bbe3739efb6/ecu_agent_model"
@@ -49,6 +50,9 @@ except ImportError:
     LANGCHAIN_API_KEY = None
     LANGCHAIN_PROJECT = None
     LANGCHAIN_ENDPOINT = None
+    LANGFUSE_SECRET_KEY = None
+    LANGFUSE_PUBLIC_KEY = None
+    LANGFUSE_BASE_URL = None
 
 import threading
 from collections import deque
@@ -61,13 +65,15 @@ class SessionMetrics:
         self.scores = deque(maxlen=maxsize)
         self.faithfulness = deque(maxlen=maxsize)
         self.relevance = deque(maxlen=maxsize)
-        self.query_counts = {"ECU-700": 0, "ECU-800": 0, "both": 0, "unknown": 0}
+        self.query_counts = {"ECU-700": 0, "ECU-800": 0, "Both": 0, "unknown": 0}
         self.start_time = time.time()
 
     def add_query(self, latency, product_line):
         with self.lock:
             self.latencies.append(latency)
-            self.query_counts[product_line] = self.query_counts.get(product_line, 0) + 1
+            # Normalize product line to match distribution labels
+            normalized_line = "Both" if product_line.lower() == "both" else product_line
+            self.query_counts[normalized_line] = self.query_counts.get(normalized_line, 0) + 1
 
     def add_eval(self, score, faithfulness, relevance):
         with self.lock:
@@ -110,10 +116,24 @@ else:
     logger.warning("LangSmith tracing disabled")
 
 # Source file map for documentation endpoints
-source_file_map: Dict[str, Path] = {
-    "ECU-700_Series_Manual.md": Path(__file__).parent.parent / "data" / "ECU-700_Series_Manual.md",
-    "ECU-800_Series_Plus.md": Path(__file__).parent.parent / "data" / "ECU-800_Series_Plus.md",
-}
+# Dynamically load all markdown files from data directory
+data_dir = Path(__file__).parent.parent / "data"
+source_file_map: Dict[str, Path] = {}
+
+if data_dir.exists():
+    for md_file in data_dir.glob("*.md"):
+        source_file_map[md_file.name] = md_file
+        logger.info(f"Loaded source file: {md_file.name}")
+else:
+    logger.warning(f"Data directory not found: {data_dir}")
+
+# Fallback to hardcoded files if directory scan fails
+if not source_file_map:
+    logger.warning("No source files found in data directory, using fallback")
+    source_file_map = {
+        "ECU-700_Series_Manual.md": Path(__file__).parent.parent / "data" / "ECU-700_Series_Manual.md",
+        "ECU-800_Series_Plus.md": Path(__file__).parent.parent / "data" / "ECU-800_Series_Plus.md",
+    }
 
 # In-memory trace history (stores up to 100 recent traces)
 trace_history: Dict[str, Dict[str, Any]] = {}
@@ -170,6 +190,8 @@ class TraceResponse(BaseModel):
     total_duration: float = Field(..., description="Total execution time in seconds")
     steps: List[TraceStep] = Field(..., description="Execution steps")
     langsmith_url: Optional[str] = Field(None, description="LangSmith trace URL if available")
+    langfuse_url: Optional[str] = Field(None, description="Langfuse trace URL if available")
+    langfuse_trace_id: Optional[str] = Field(None, description="Langfuse trace ID for reference")
 
 
 # Server startup time
@@ -301,13 +323,13 @@ async def get_bosch_logo():
     return JSONResponse(content={"error": "Logo not found"}, status_code=404)
 
 
-@app.get("/BOSCH_LOGO.png")
-async def get_bosch_logo():
-    """Serve the Bosch logo file."""
+@app.get("/favicon.ico")
+async def get_favicon():
+    """Serve a favicon to avoid 404 errors in the console."""
     logo_path = Path(__file__).parent / "BOSCH_LOGO.png"
     if logo_path.exists():
         return FileResponse(logo_path)
-    return JSONResponse(content={"error": "Logo not found"}, status_code=404)
+    return JSONResponse(content={"status": "no favicon"}, status_code=404)
 
 
 @app.get("/api")
@@ -423,14 +445,29 @@ async def query_ecu(request: QueryRequest):
             logger.warning(f"Unexpected result type: {type(result)}")
 
         response_text = model_metadata.get("response", "")
-        rewritten_query = model_metadata.get("rewritten_query", request.query)
+
+        # Handle rewritten_query - ensure it's always a string
+        raw_rewritten_query = model_metadata.get("rewritten_query", request.query)
+        if isinstance(raw_rewritten_query, list):
+            # Join list items if it's a list
+            rewritten_query = " ".join(str(item) for item in raw_rewritten_query) if raw_rewritten_query else request.query
+        else:
+            rewritten_query = str(raw_rewritten_query) if raw_rewritten_query else request.query
+
         retrieved_docs = model_metadata.get("retrieved_docs", [])
-        
+
+        # Extract Langfuse trace ID if available
+        langfuse_trace_id = model_metadata.get("trace_id")
+        langfuse_enabled = model_metadata.get("langfuse_enabled", False)
+
         # Deep Diagnostic Logging
         logger.info(f"Retrieved docs count: {len(retrieved_docs)}")
         if retrieved_docs:
             logger.info(f"First doc keys: {retrieved_docs[0].keys() if isinstance(retrieved_docs[0], dict) else 'Not a dict'}")
             logger.info(f"First doc metadata: {retrieved_docs[0].get('metadata') if isinstance(retrieved_docs[0], dict) else 'N/A'}")
+
+        if langfuse_trace_id:
+            logger.info(f"Langfuse trace ID: {langfuse_trace_id}")
 
         detected_lines = [model_metadata.get("detected_product_line", "unknown")]
         
@@ -439,12 +476,27 @@ async def query_ecu(request: QueryRequest):
         query_end = time.time()
         latency = query_end - query_start
 
-        # Extract unique source files
-        source_files = sorted(list(set([
-            doc.get("metadata", {}).get("source", "Unknown") 
-            for doc in retrieved_docs 
-            if doc.get("metadata", {}).get("source")
-        ])))
+        # Extract unique source files with robust metadata handling
+        source_files = []
+        for doc in retrieved_docs:
+            if not isinstance(doc, dict):
+                continue
+                
+            metadata = doc.get("metadata", {})
+            if not metadata:
+                continue
+                
+            # Check common source keys
+            source = metadata.get("source") or metadata.get("file_path") or metadata.get("filename")
+            
+            if source:
+                # Get just the filename if it's a path
+                if isinstance(source, str):
+                    source_name = Path(source).name
+                    if source_name not in source_files and source_name != "Unknown":
+                        source_files.append(source_name)
+        
+        source_files = sorted(source_files)
 
         # Build real trace steps
         trace_steps = [
@@ -494,7 +546,9 @@ async def query_ecu(request: QueryRequest):
             "total_duration": latency,
             "steps": trace_steps,
             "timestamp": time.time(),
-            "detected_product_lines": detected_lines
+            "detected_product_lines": detected_lines,
+            "langfuse_trace_id": langfuse_trace_id,
+            "langfuse_enabled": langfuse_enabled
         }
 
         # Generate evaluation if test data provided
@@ -656,11 +710,19 @@ async def get_trace(trace_id: str):
     if LANGCHAIN_TRACING_V2 and LANGCHAIN_PROJECT:
         langsmith_url = f"https://smith.langchain.com/projects/{LANGCHAIN_PROJECT}"
 
+    # Generate Langfuse URL if enabled
+    langfuse_url = None
+    langfuse_trace_id = trace_data.get("langfuse_trace_id")
+    if trace_data.get("langfuse_enabled") and langfuse_trace_id and LANGFUSE_BASE_URL:
+        langfuse_url = f"{LANGFUSE_BASE_URL}/trace/{langfuse_trace_id}"
+
     return TraceResponse(
         query=trace_data["query"],
         total_duration=trace_data["total_duration"],
         steps=steps,
-        langsmith_url=langsmith_url
+        langsmith_url=langsmith_url,
+        langfuse_url=langfuse_url,
+        langfuse_trace_id=langfuse_trace_id
     )
 
 

@@ -117,3 +117,17 @@ Thumbs.db
 # Project specific
 databricks.yml
 *.state.json
+
+# Web development - temporary debug files
+web/*.backup
+web/clear-cache-guide.html
+web/diagnostic.html
+web/test_*.py
+
+# Presentation and demo documents (temporary)
+DEPLOYMENT-SUMMARY.md
+FINAL-PRESENTATION.md
+PROJECT-LEADERSHIP-PRESENTATION.md
+PROJECT-LEADERSHIP-PRESENTATION-ULTIMATE.md
+PROJECT-SUMMARY-REPORT.md
+PROJECT-VISUALIZATIONS-AND-OPTIMIZATION-ANALYSIS.md
