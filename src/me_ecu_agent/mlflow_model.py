@@ -90,7 +90,7 @@ class ECUAgentMLflowModel(PythonModel):
                     base_url=self.langfuse_config.base_url
                 )
                 if langfuse.enabled:
-                    logger.info("✓ Langfuse integration enabled successfully")
+                    logger.info("[OK] Langfuse integration enabled successfully")
                     logger.info(f"  Base URL: {self.langfuse_config.base_url}")
                 else:
                     logger.warning("Langfuse integration initialized but not enabled")

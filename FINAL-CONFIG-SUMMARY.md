@@ -20,7 +20,7 @@ OPENAI_API_KEY=
 
 #### Environment Variables in Container ✓
 ```bash
-QWEN_API_KEY=sk-d5e7ff1fede04efea...ff7b
+QWEN_API_KEY=sk-your-qwen-api-key-here...
 LLM_PROVIDER=qwen
 ```
 
@@ -65,7 +65,7 @@ Expected output:
 Provider: qwen
 Model: qwen-plus
 Base URL: https://dashscope.aliyuncs.com/compatible-mode/v1
-API Key: sk-d5e7ff1fede04efeab...
+API Key: sk-your-qwen-api-key-here...
 ```
 
 ### If Issue Persists
