@@ -51,7 +51,7 @@ class EmbeddingsConfig:
             if not openai_key or openai_key in ["", "sk-xxx", "sk-your-openai-api-key-here"]:
                 raise ValueError("OpenAI API key not configured")
             return cls(
-                model_name="text-embedding-ada-002",
+                model_name=os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002"),
                 api_key=openai_key,
                 base_url="https://api.openai.com/v1",
                 provider="openai"
@@ -63,7 +63,7 @@ class EmbeddingsConfig:
             # For Qwen embeddings with LangChain's OpenAIEmbeddings,
             # we need to use OpenAI's format but with Qwen's endpoint
             return cls(
-                model_name="text-embedding-v2",
+                model_name=os.getenv("EMBEDDING_MODEL", "text-embedding-v2"),
                 api_key=qwen_key,
                 base_url=qwen_base_url,
                 provider="qwen"
@@ -174,10 +174,10 @@ class ModelConfig:
             if not openai_key or openai_key in ["", "sk-xxx", "sk-your-openai-api-key-here"]:
                 raise ValueError("OpenAI API key not configured")
             return cls(
-                model_name="gpt-3.5-turbo",
+                model_name=os.getenv("LLM_MODEL", "gpt-3.5-turbo"),
                 api_key=openai_key,
                 base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-                embedding_model="text-embedding-ada-002",
+                embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002"),
                 temperature=0.0,
                 max_tokens=1000,
                 provider="openai"
@@ -188,10 +188,10 @@ class ModelConfig:
             if not qwen_key or qwen_key in ["", "sk-xxx", "sk-your-openai-api-key-here"]:
                 raise ValueError("Qwen API key not configured")
             return cls(
-                model_name="qwen-plus",
+                model_name=os.getenv("LLM_MODEL", "qwen-plus"),
                 api_key=qwen_key,
                 base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-                embedding_model="text-embedding-v2",
+                embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-v2"),
                 temperature=0.0,
                 max_tokens=1000,
                 provider="qwen"

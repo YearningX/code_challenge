@@ -13,6 +13,7 @@ from langchain_core.vectorstores import VectorStoreRetriever
 from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
 from me_ecu_agent.config import RetrievalConfig
+from me_ecu_agent.model_config import get_embeddings_config
 
 
 class VectorStoreManager:
@@ -21,7 +22,14 @@ class VectorStoreManager:
     def __init__(self, config: RetrievalConfig = None):
         """Initialize VectorStoreManager with configuration."""
         self.config = config or RetrievalConfig()
-        self.embeddings = OpenAIEmbeddings()
+        
+        # Get dynamic embeddings configuration
+        embed_config = get_embeddings_config()
+        self.embeddings = OpenAIEmbeddings(
+            model=embed_config.model_name,
+            api_key=embed_config.api_key,
+            base_url=embed_config.base_url
+        )
         self._ecu700_store: Optional[FAISS] = None
         self._ecu800_store: Optional[FAISS] = None
 
@@ -126,7 +134,14 @@ def load_vector_stores(directory: str):
     if not save_path.exists():
         raise FileNotFoundError(f"Directory not found: {directory}")
 
-    embeddings = OpenAIEmbeddings()
+    # Use centralized config for backward compatibility functions
+    from me_ecu_agent.model_config import get_embeddings_config
+    embed_config = get_embeddings_config()
+    embeddings = OpenAIEmbeddings(
+        model=embed_config.model_name,
+        api_key=embed_config.api_key,
+        base_url=embed_config.base_url
+    )
     store_700 = None
     store_800 = None
 

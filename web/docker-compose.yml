@@ -5,18 +5,23 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ecu-assistant-api
+    env_file:
+      - ../.env
     ports:
-      - "18500:18500"
+      - "${API_PORT}:${API_PORT}"
     environment:
-      - MLFLOW_MODEL_URI=/app/models/ecu_agent_model_local/ecu_agent_model
-      - API_HOST=0.0.0.0
-      - API_PORT=18500
-      - API_RELOAD=false
+      - MLFLOW_MODEL_URI=${MLFLOW_MODEL_URI:-/app/models/ecu_agent_model_local/ecu_agent_model}
+      - API_HOST=${API_HOST}
+      - API_PORT=${API_PORT}
+      - API_RELOAD=${API_RELOAD}
+      - LLM_PROVIDER=${LLM_PROVIDER}
+      - LLM_MODEL=${LLM_MODEL}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      # Langfuse Configuration (hardcoded for Windows compatibility)
-      - LANGFUSE_SECRET_KEY=your-api-key-placeholder
-      - LANGFUSE_PUBLIC_KEY=your-api-key-placeholder
-      - LANGFUSE_BASE_URL=https://langfuse.cccoder.top
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL}
     volumes:
       # Mount MLflow runs directory from host
       - ../mlruns:/app/mlruns:ro
@@ -33,7 +38,7 @@ services:
       - ecu-assistant-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:18500/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${API_PORT}/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
