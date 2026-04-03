@@ -80,29 +80,35 @@
             position: relative;
         }
         .chat-bubble {
-            max-width: 85%;
+            max-width: 80%;
             margin-bottom: 24px;
-            border-radius: 12px;
+            border-radius: 16px;
             padding: 16px 20px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-            animation: slideIn 0.3s ease-out;
+            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05), 0 8px 10px -6px rgba(0,0,0,0.05);
+            animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
         }
         @keyframes slideIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
+            from { opacity: 0; transform: translateY(12px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
         }
         .user-bubble {
-            background: var(--bosch-blue);
+            background: linear-gradient(135deg, #005691 0%, #003d66 100%);
             color: white;
             align-self: flex-end;
             margin-left: auto;
-            border-bottom-right-radius: 2px;
+            border-bottom-right-radius: 4px;
         }
         .agent-bubble {
             background: white;
             color: #333;
-            border-bottom-left-radius: 2px;
-            border-left: 4px solid var(--bosch-red);
+            border-bottom-left-radius: 4px;
+            border: 1px solid #E5E7EB;
+            border-left: 4px solid var(--bosch-blue);
+        }
+        /* Special style for response with red indicator */
+        .agent-bubble-bosch {
+            border-left-color: var(--bosch-red);
         }
         .kpi-card {
             background: white;
@@ -214,9 +220,6 @@
 </head>
 <body>
     <!-- Version indicator - helps verify you're seeing the updated version -->
-    <div id="version-badge" style="position: fixed; bottom: 10px; right: 10px; background: #005691; color: white; padding: 5px 10px; border-radius: 4px; font-size: 11px; font-weight: bold; z-index: 9999; opacity: 0.7;">
-        v2.0-dev-cleanup
-    </div>
 
     <header class="header">
         <div class="flex items-center gap-3">
@@ -278,10 +281,16 @@
                     <!-- Templates loaded dynamically -->
                 </div>
             </div>
-            <div class="p-4 bg-gray-50 border-t">
-                <div class="flex items-center justify-between text-xs text-gray-500">
-                    <span>Engine Thermal Mgmt</span>
-                    <span>v1.0.4-prod</span>
+            <div class="p-4 bg-gray-50 border-t mt-auto">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-tight">
+                        <i class="fas fa-microchip text-blue-600"></i>
+                        Engine Thermal Mgmt
+                    </div>
+                    <span class="px-2 py-1 bg-white border border-slate-200 text-slate-500 text-[10px] font-mono rounded shadow-sm">v2026.04.03</span>
+                </div>
+                <div class="mt-2 text-[9px] text-gray-400 font-medium italic opacity-60">
+                    <i class="fas fa-shield-alt mr-1"></i> production-hardened environment
                 </div>
             </div>
         </aside>
@@ -292,10 +301,33 @@
             <div id="view-chat" class="h-full flex flex-col max-w-4xl mx-auto">
                 <div id="chat-messages" class="flex-1 overflow-y-auto pb-4 flex flex-col">
                     <!-- Simple welcome message -->
-                    <div class="agent-bubble chat-bubble">
-                        <p class="font-semibold text-blue-800 mb-2">👋 Hello!</p>
-                        <p>I am your ME ECU Technical Assistant, ready to help you query technical documentation for ECU-700 and ECU-800 series.</p>
-                        <p class="text-sm text-gray-500 mt-2">Please enter your question or select a test question from the left sidebar to get started.</p>
+                    <div class="agent-bubble chat-bubble bg-gradient-to-br from-white to-blue-50 border-l-4 border-blue-600 shadow-sm p-6">
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center text-blue-600 text-xl shadow-inner">
+                                <i class="fas fa-robot"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-lg font-bold text-slate-800">ME ECU Engineering Intelligence</h3>
+                                <p class="text-xs text-blue-600 font-semibold uppercase tracking-wider">Official Documentation Assistant</p>
+                            </div>
+                        </div>
+                        
+                        <div class="space-y-3 text-sm text-slate-600 leading-relaxed">
+                            <p>I am your specialized AI agent, trained on **BOSCH ECU-700 & ECU-800 Series** technical manuals.</p>
+                            
+                            <div class="grid grid-cols-2 gap-2 mt-4">
+                                <div class="p-3 bg-white/60 rounded-lg border border-blue-100 flex items-center gap-2">
+                                    <i class="fas fa-search text-blue-400 text-xs"></i>
+                                    <span class="text-[11px] font-medium">Specs Retrieval</span>
+                                </div>
+                                <div class="p-3 bg-white/60 rounded-lg border border-blue-100 flex items-center gap-2">
+                                    <i class="fas fa-exchange-alt text-blue-400 text-xs"></i>
+                                    <span class="text-[11px] font-medium">Product Comparison</span>
+                                </div>
+                            </div>
+                            
+                            <p class="text-xs text-gray-400 pt-3 italic">Use the sidebar for test questions or type directly to begin.</p>
+                        </div>
                     </div>
                 </div>
                 
@@ -543,7 +575,9 @@
         function appendMessage(role, text, data = null, isError = false) {
             const container = document.getElementById('chat-messages');
             const div = document.createElement('div');
-            div.className = `chat-bubble ${role}-bubble ${isError ? 'border-red-500 bg-red-50 text-red-700' : ''}`;
+            // Add different styling for actual agent responses (vs welcome card)
+            const boschClass = (role === 'agent' && data) ? 'agent-bubble-bosch' : '';
+            div.className = `chat-bubble ${role}-bubble ${boschClass} ${isError ? 'border-red-500 bg-red-50 text-red-700' : ''}`;
             
             let html = marked.parse(text);
             
@@ -949,7 +983,8 @@
                     totalLatency += lat;
                     completed++;
 
-                    let responseHtml = `<div class="text-xs line-clamp-3" title="${data.response}">${data.response}</div>`;
+                    const responseText = data.response || data.answer || "No response received";
+                    let responseHtml = `<div class="text-xs line-clamp-3" title="${responseText}">${responseText}</div>`;
 
                     // Add relevance indicator for irrelevant queries
                     if (data.is_relevant === false) {

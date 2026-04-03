@@ -5,15 +5,15 @@ services:
   # ME ECU Assistant API Server - Development Mode
   ecu-assistant-api:
     build:
-      context: .
+      context: web
       dockerfile: Dockerfile
     container_name: ecu-assistant-api-dev
     env_file:
-      - ../.env
+      - .env
     ports:
       - "${API_PORT}:${API_PORT}"
     environment:
-      - MLFLOW_MODEL_URI=${MLFLOW_MODEL_URI:-/app/models/ecu_agent_model_local/ecu_agent_model}
+      - MLFLOW_MODEL_URI=${MLFLOW_MODEL_URI:-/models/ecu_agent_model_local/ecu_agent_model}
       - API_HOST=${API_HOST}
       - API_PORT=${API_PORT}
       - API_RELOAD=${API_RELOAD}
@@ -27,17 +27,17 @@ services:
       - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL}
     volumes:
       # 🔥 Development mode: Mount all frontend files for real-time updates
-      - ./index.html:/app/index.html:ro
-      - ./BOSCH_LOGO.png:/app/BOSCH_LOGO.png:ro
+      - ./web/index.html:/app/index.html:ro
+      - ./web/BOSCH_LOGO.png:/app/BOSCH_LOGO.png:ro
 
       # Data directory mounts
-      - ../mlruns:/app/mlruns:ro
-      - ../data:/app/data:ro
-      - ../models:/app/models:ro
+      - ./mlruns:/mlruns:ro
+      - ./data:/data:ro
+      - ./models:/models:ro
 
       # 🔥 Development mode: Mount Python source code (optional, for backend debugging)
-      # - ./api_server.py:/app/api_server.py:ro
-      # - ./config.py:/app/config.py:ro
+      # - ./web/api_server.py:/app/api_server.py:ro
+      # - ./web/config.py:/app/config.py:ro
     networks:
       - ecu-assistant-network
     restart: unless-stopped

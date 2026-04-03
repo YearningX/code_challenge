@@ -1,0 +1,16 @@
+channels:
+- conda-forge
+dependencies:
+- python=3.11.0
+- pip<=26.0.1
+- pip:
+  - langchain>=0.2.0
+  - langchain-openai>=0.1.0
+  - langchain-community>=0.2.0
+  - langchain-core>=0.2.0
+  - langgraph>=0.1.0
+  - faiss-cpu>=1.8.0
+  - mlflow>=2.14.0
+  - tiktoken>=0.7.0
+  - python-dotenv>=1.0.0
+name: mlflow-env

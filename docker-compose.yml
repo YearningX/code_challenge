@@ -2,15 +2,15 @@ services:
   # ME ECU Assistant API Server
   ecu-assistant-api:
     build:
-      context: .
+      context: web
       dockerfile: Dockerfile
     container_name: ecu-assistant-api
     env_file:
-      - ../.env
+      - .env
     ports:
       - "${API_PORT}:${API_PORT}"
     environment:
-      - MLFLOW_MODEL_URI=${MLFLOW_MODEL_URI:-/app/models/ecu_agent_model_local/ecu_agent_model}
+      - MLFLOW_MODEL_URI=${MLFLOW_MODEL_URI:-/models/ecu_agent_model_local/ecu_agent_model}
       - API_HOST=${API_HOST}
       - API_PORT=${API_PORT}
       - API_RELOAD=${API_RELOAD}
@@ -24,16 +24,16 @@ services:
       - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL}
     volumes:
       # Mount MLflow runs directory from host
-      - ../mlruns:/app/mlruns:ro
+      - ./mlruns:/mlruns:ro
       # Mount data directory for documentation
-      - ../data:/app/data:ro
+      - ./data:/data:ro
       # Mount local model artifacts
-      - ../models:/app/models:ro
+      - ./models:/models:ro
       # Mount source code for development (optional)
-      - ./api_server.py:/app/api_server.py:ro
-      - ./config.py:/app/config.py:ro
-      - ./index.html:/app/index.html:ro
-      - ./BOSCH_LOGO.png:/app/BOSCH_LOGO.png:ro
+      - ./web/api_server.py:/app/api_server.py:ro
+      - ./web/config.py:/app/config.py:ro
+      - ./web/index.html:/app/index.html:ro
+      - ./web/BOSCH_LOGO.png:/app/BOSCH_LOGO.png:ro
     networks:
       - ecu-assistant-network
     restart: unless-stopped
@@ -55,8 +55,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./index.html:/usr/share/nginx/html/index.html:ro
+      - ./web/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./web/index.html:/usr/share/nginx/html/index.html:ro
     networks:
       - ecu-assistant-network
     depends_on:

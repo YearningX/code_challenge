@@ -1,0 +1,38 @@
+artifact_path: file:///F:/projects/BOSCH_Code_Challenge/mlruns/1/models/m-76d61b27e0d44dca8ef07fdc6d47d302/artifacts
+env_vars:
+- LANGCHAIN_API_KEY
+- OPENAI_API_KEY
+- QWEN_API_KEY
+- TAVILY_API_KEY
+flavors:
+  python_function:
+    artifacts:
+      vector_stores:
+        path: artifacts\vector_stores_vttp2hgq
+        uri: C:\Users\yearning\AppData\Local\Temp\vector_stores_vttp2hgq
+    cloudpickle_version: 3.1.2
+    code: code
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.pyfunc.model
+    python_model: python_model.pkl
+    python_version: 3.11.0
+    streamable: false
+is_signature_from_type_hint: false
+mlflow_version: 3.10.1
+model_id: m-76d61b27e0d44dca8ef07fdc6d47d302
+model_size_bytes: 93959
+model_uuid: m-76d61b27e0d44dca8ef07fdc6d47d302
+prompts: null
+run_id: cb4bad1caf334366826deee85ffa3ad8
+saved_input_example_info:
+  artifact_path: input_example.json
+  serving_input_path: serving_input_example.json
+  type: json_object
+signature:
+  inputs: '[{"type": "string", "name": "query", "required": true}]'
+  outputs: '[{"type": "array", "items": {"type": "string"}, "required": true}]'
+  params: null
+type_hint_from_example: false
+utc_time_created: '2026-04-03 05:04:53.808050'
