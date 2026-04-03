@@ -12,7 +12,7 @@ The system is built using a **RAG (Retrieval-Augmented Generation)** architectur
 - **RAG Engine**:
   - **Document Processor**: Parses Markdown files with header-aware splitting.
   - **Vector Storage**: Uses **FAISS** (in-memory) for sub-second retrieval.
-  - **Embedding Model**: OpenAI `text-embedding-3-small` (local平替) or Databricks Embedding models.
+  - **Embedding Model**: OpenAI `text-embedding-3-small` (local alternative) or Databricks Embedding models.
 - **MLOps Lifecycle**: 
   - **Packaging**: Standardized as a Python package (`me_ecu_agent`).
   - **Model Serving**: Logged as a **Custom MLflow PyFunc** model with a "Models from Code" approach to ensure portability and avoid serialization issues.

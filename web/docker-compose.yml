@@ -14,8 +14,8 @@ services:
       - API_RELOAD=false
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       # Langfuse Configuration (hardcoded for Windows compatibility)
-      - LANGFUSE_SECRET_KEY=sk-lf-80d2f119-e37d-474b-abbf-07cdca6bf5b4
-      - LANGFUSE_PUBLIC_KEY=pk-lf-bfcc44a5-129e-4874-af0a-6cd602d6bc71
+      - LANGFUSE_SECRET_KEY=your-api-key-placeholder
+      - LANGFUSE_PUBLIC_KEY=your-api-key-placeholder
       - LANGFUSE_BASE_URL=https://langfuse.cccoder.top
     volumes:
       # Mount MLflow runs directory from host
