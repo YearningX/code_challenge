@@ -374,9 +374,9 @@ class ECUQueryAgent:
             with ThreadPoolExecutor(max_workers=len(queries) * 2) as executor:
                 for vector in query_vectors:
                     if self.ecu700_retriever:
-                        all_futures.append(executor.submit(search_by_vector, self.ecu700_retriever, vector, k=8))
+                        all_futures.append(executor.submit(search_by_vector, self.ecu700_retriever, vector, k=6))
                     if self.ecu800_retriever:
-                        all_futures.append(executor.submit(search_by_vector, self.ecu800_retriever, vector, k=12))
+                        all_futures.append(executor.submit(search_by_vector, self.ecu800_retriever, vector, k=10))
 
                 for future in all_futures:
                     for doc in future.result():
