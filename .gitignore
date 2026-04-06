@@ -133,3 +133,14 @@ PROJECT-SUMMARY-REPORT.md
 PROJECT-VISUALIZATIONS-AND-OPTIMIZATION-ANALYSIS.md
 web/DEMO-PRESENTATION-GUIDE.md
 web/PROJECT-COMPLETION-SUMMARY.md
+
+# Vector store indices (auto-generated, exclude test versions)
+# Only keep current production version: vector_stores_lum7w6vo/
+models/ecu_agent_model_local/ecu_agent_model/artifacts/vector_stores_*/
+!models/ecu_agent_model_local/ecu_agent_model/artifacts/vector_stores_lum7w6vo/
+*.bak
+*.backup
+
+# Temporary files and test outputs
+tmp/
+test_output*.txt

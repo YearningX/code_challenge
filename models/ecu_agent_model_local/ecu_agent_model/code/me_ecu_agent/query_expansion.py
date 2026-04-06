@@ -22,7 +22,14 @@ class QueryExpander:
     """
 
     def __init__(self):
-        self.llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.0)
+        from me_ecu_agent.model_config import get_model_config
+        model_config = get_model_config()
+        self.llm = ChatOpenAI(
+            model=model_config.model_name,
+            api_key=model_config.api_key,
+            base_url=model_config.base_url,
+            temperature=0.0
+        )
         self.expansion_prompt = ChatPromptTemplate.from_messages([
             ("system", "You are a query expansion expert for Bosch ECU technical documentation. "
              "Generate 2-3 alternative formulations of the user's query. "

@@ -90,7 +90,7 @@ class ECUAgentMLflowModel(PythonModel):
                     base_url=self.langfuse_config.base_url
                 )
                 if langfuse.enabled:
-                    logger.info("✓ Langfuse integration enabled successfully")
+                    logger.info("[OK] Langfuse integration enabled successfully")
                     logger.info(f"  Base URL: {self.langfuse_config.base_url}")
                 else:
                     logger.warning("Langfuse integration initialized but not enabled")
@@ -100,34 +100,33 @@ class ECUAgentMLflowModel(PythonModel):
                 self.langfuse_config.enabled = False
 
             # Load vector stores from artifacts
-            vector_store_dir = context.artifacts.get("vector_stores")
-            if not vector_store_dir:
-                raise ValueError("Vector stores artifact not found in model context")
+            vector_store_artifact_dir = context.artifacts.get("vector_stores")
+            
+            # Robust deep scanning: find ALL potential vector_stores paths recursively
+            # This handles both flat and nested MLflow artifact structures
+            artifacts_base = Path(vector_store_artifact_dir).parent
+            logger.info(f"Scanning for vector stores in: {artifacts_base}")
+            
+            # Search recursively up to 2 levels deep
+            potential_dirs = []
+            for d in artifacts_base.rglob("vector_stores_*"):
+                if d.is_dir() and not str(d).endswith(".backup"):
+                    potential_dirs.append(d)
+            
+            if not potential_dirs:
+                logger.error(f"CRITICAL: No vector_stores_* directories found in {artifacts_base} or subfolders")
+                raise ValueError(f"Vector stores artifact not found search rooted at {artifacts_base}")
+            
+            # Sort by creation time to get the newest
+            potential_dirs.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            search_path = str(potential_dirs[0])
+            logger.info(f"Dynamic discovery found latest vector store at: {search_path}")
 
-            # Fix: Try both the artifact path and potential relative paths
-            potential_paths = [
-                vector_store_dir,
-                str(Path(vector_store_dir).parent / "data"),
-                "/app/models/ecu_agent_model_local/ecu_agent_model/artifacts/vector_stores_yrw1jr2e",
-                "/app/data",
-                os.path.join(os.getcwd(), "data")
-            ]
-            
-            store_700 = None
-            store_800 = None
-            
-            for path in potential_paths:
-                if not path: continue
-                clean_path = str(path).replace("\\", "/")
-                if os.path.exists(clean_path):
-                    try:
-                        logger.info(f"Attempting to load vector stores from: {clean_path}")
-                        store_700, store_800 = load_vector_stores(clean_path)
-                        if store_700 or store_800:
-                            logger.info(f"Successfully loaded stores from {clean_path}")
-                            break
-                    except Exception as e:
-                        logger.warning(f"Could not load stores from {clean_path}: {e}")
+            store_700, store_800 = load_vector_stores(search_path)
+            if store_700 or store_800:
+                logger.info(f"Successfully loaded stores from {search_path}")
+            else:
+                logger.error(f"Failed to load FAISS indices from found path: {search_path}")
 
             if not store_700 and not store_800:
                 logger.error("CRITICAL: No vector stores could be loaded from any attempt.")
@@ -140,7 +139,7 @@ class ECUAgentMLflowModel(PythonModel):
             )
 
             if self.agent.langfuse_enabled:
-                logger.info("✓ Agent initialized with Langfuse tracing")
+                logger.info("[OK] Agent initialized with Langfuse tracing")
             else:
                 logger.info("Agent initialized without Langfuse tracing")
 

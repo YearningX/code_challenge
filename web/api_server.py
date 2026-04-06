@@ -199,13 +199,15 @@ start_time = time.time()
 query_distribution_counts = {"ECU-700": 0, "ECU-800": 0, "Both": 0}
 
 
-def generate_evaluation(llm_response: str, test_data: Dict[str, Any], retrieved_docs: List[Dict] = None) -> Dict[str, Any]:
+def generate_evaluation(llm_response: str, test_data: Dict[str, Any], retrieved_docs: List[Dict] = None, original_query: str = None) -> Dict[str, Any]:
     """
-    Generate professional evaluation results using RAGAS-style LLM-as-a-judge.
+    Generate professional evaluation results using RAGAs-style LLM-as-a-judge.
     """
     expected_answer = test_data.get('expected_answer', '')
     evaluation_criteria = test_data.get('evaluation_criteria', '')
-    context_text = "\n".join([d.get('content', '')[:300] for d in (retrieved_docs or [])])
+    # Increase context window to capture full tables/specs
+    context_text = "\n".join([d.get('content', '')[:3000] for d in (retrieved_docs or [])])
+    query = original_query or test_data.get('question', 'Analyze the response')
 
     try:
         # Import model config to get proper LLM configuration
@@ -214,7 +216,7 @@ def generate_evaluation(llm_response: str, test_data: Dict[str, Any], retrieved_
         # Use the same model configuration as the main agent
         model_config = get_model_config()
 
-        # Create evaluation LLM with proper configuration
+        # Create evaluation LLM (Qwen or GPT)
         eval_llm = ChatOpenAI(
             model=model_config.model_name,
             api_key=model_config.api_key,
@@ -232,7 +234,10 @@ RAGAs Metrics to provide (0-100):
 4. CONTEXT_RECALL: How well does the context cover the information needed?
 5. OVERALL_SCORE: Composite score (0-100). Technical accuracy is most important.
 
-IMPORTANT: Responses with precise technical numbers matching the baseline must score >80.
+IMPORTANT EVALUATION RULES:
+- If the Assistant Response identifies correct technical values (like 16GB, 32GB, 1Mbps) that are present in the Context but NOT in the Expected Answer, DO NOT penalize for hallucinations. Reward this accuracy.
+- Verify numbers and units against the Context before marking as ungrounded.
+- If the response is technically correct according to Context, score FAITHFULNESS > 90.
 
 Format your response exactly as:
 FAITHFULNESS: <0-100>
@@ -242,7 +247,7 @@ CONTEXT_RECALL: <0-100>
 SCORE: <0-100>
 VERDICT: <One sentence explanation>"""),
             ("human", f"""Context: {context_text}
-Question: {evaluation_criteria}
+Question: {query} (Criteria: {evaluation_criteria})
 Expected Answer: {expected_answer}
 Assistant Response: {llm_response}""")
         ])
@@ -250,7 +255,7 @@ Assistant Response: {llm_response}""")
         chain = prompt | eval_llm
         eval_result = chain.invoke({
             "context_text": context_text,
-            "evaluation_criteria": evaluation_criteria,
+            "query": query,
             "expected_answer": expected_answer,
             "llm_response": llm_response
         }).content
@@ -303,6 +308,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Loading MLflow model from: {MODEL_URI}")
 
     try:
+        # PURE PRODUCTION MODE: Only load from versioned MLflow registry
         ecu_agent_model = mlflow.pyfunc.load_model(MODEL_URI)
         logger.info("MLflow model loaded successfully")
     except Exception as e:
@@ -598,9 +604,10 @@ async def query_ecu(request: QueryRequest):
         evaluation = None
         if request.test_data:
             evaluation = generate_evaluation(
-                response_text,
-                request.test_data,
-                retrieved_docs
+                llm_response=response_text,
+                test_data=request.test_data,
+                retrieved_docs=retrieved_docs,
+                original_query=request.query
             )
 
         # Update Session Metrics

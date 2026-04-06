@@ -135,18 +135,79 @@ class ECUQueryAgent:
              "CRITICAL INSTRUCTIONS: " +
              "1. Always specify exact model names (ECU-750/850/850b). " +
              "2. Answer using RELEVANT information from context (don't include unrelated specs). " +
-             "3. COMPREHENSIVENESS for the asked question: " +
-             "   - For 'which models support X': List both supported AND unsupported models. " +
-             "   - For 'compare all': Provide info for each relevant model. " +
+             "3. COMPREHENSIVENESS: " +
+             "   - For 'which models support X': Explicitly list supported AND UNSUPPORTED models. " +
              "   - For specs with multiple states (idle/load, min/max): Include ALL states. " +
-             "4. Use exact numbers and units from context. " +
-             "5. Only use provided information - do not hallucinate. " +
+             "4. FACTUAL INTEGRITY: " +
+             "   - Pay extreme attention to 'NOT supported', 'no support', or 'unavailable' statements. " +
+             "   - NEVER assume a feature is supported by omission. If context doesn't mention it, say it is not specified. " +
+             "   - If context says 'X is not supported on ECU-750', your answer MUST reflect this. " +
+             "5. Use exact numbers and units from context. " +
              "6. STRICT REQUIREMENT: DO NOT use any emojis (like ✅, ➡️, etc.). Use standard professional text only. " +
              "Context: {context}."),
             ("human", "{query}")
         ])
+        # Auto-discover and load retrievers if possible
+        self._auto_discover_retrievers()
 
-    def register_retriever(self, product_line: str, retriever: VectorStoreRetriever) -> None:
+    def _auto_discover_retrievers(self):
+        """Finds and loads vector stores from common artifact locations with case-insensitivity."""
+        from me_ecu_agent.vectorstore import load_vector_stores
+        
+        # Priority 1: Container mount point (Production)
+        # Priority 2: Local data directory (Development)
+        potential_bases = [
+            "/models/ecu_agent_model_local/ecu_agent_model",
+            os.path.join(os.getcwd(), "models/ecu_agent_model_local/ecu_agent_model"),
+            os.path.join(os.getcwd(), "data"),
+            "/app/data"
+        ]
+        
+        potential_paths = []
+        for base in potential_bases:
+            if not os.path.exists(base): continue
+            # Add the base itself
+            potential_paths.append(base)
+            # Find all subdirectories case-insensitively (artifacts, Artifacts, vector_stores_*)
+            try:
+                for entry in os.listdir(base):
+                    full_path = os.path.join(base, entry)
+                    if not os.path.isdir(full_path): continue
+                    
+                    # Target both 'artifacts' folders and direct 'vector_stores' folders
+                    if entry.lower() in ["artifacts", "data"] or "vector_stores_" in entry.lower():
+                        potential_paths.append(full_path)
+                        # Also look inside artifacts/ for vector_stores_
+                        if entry.lower() == "artifacts":
+                            for sub in os.listdir(full_path):
+                                if "vector_stores_" in sub.lower():
+                                    potential_paths.append(os.path.join(full_path, sub))
+            except Exception: continue
+
+        # De-duplicate and prioritize
+        unique_paths = list(dict.fromkeys(potential_paths))
+        print(f"Scanning {len(unique_paths)} potential index locations...")
+
+        for path in unique_paths:
+            if not os.path.exists(path): continue
+            try:
+                # Try loading. If it doesn't contain index files, load_vector_stores should raise/return none
+                store_700, store_800 = load_vector_stores(path)
+                
+                if store_700:
+                    self.register_retriever("ECU-700", store_700.as_retriever(search_kwargs={"k": 5}))
+                if store_800:
+                    self.register_retriever("ECU-800", store_800.as_retriever(search_kwargs={"k": 12}))
+                
+                if self.ecu700_retriever or self.ecu800_retriever:
+                    print(f"[OK] Successfully initialized retrievers from: {path}")
+                    return # Stop on first success
+            except Exception as e:
+                continue
+        
+        print("Warning: No valid vector stores found during auto-discovery.")
+
+    def register_retriever(self, product_line: str, retriever: Any) -> None:
         hybrid = create_hybrid_retriever(retriever)
         if product_line == "ECU-700":
             self.ecu700_retriever = hybrid
@@ -220,8 +281,10 @@ class ECUQueryAgent:
                         seen_content.add(doc.page_content)
         
         state["retrieved_docs"] = [{"content": doc.page_content, "metadata": doc.metadata} for doc in all_docs]
+        for doc in all_docs:
+            doc.metadata["product_line"] = "ECU-700"
         context_parts = [f"[ECU-700: {doc.metadata.get('source', 'U')}]{doc.page_content}" for doc in all_docs]
-        state["retrieved_context"] = " ".join(context_parts)
+        state["retrieved_context"] = "\n\n".join(context_parts)
         state["messages"].append(AIMessage(content=f"Retrieved {len(all_docs)} from ECU-700"))
 
         # Update metadata with result
@@ -263,18 +326,15 @@ class ECUQueryAgent:
                         seen_content.add(doc.page_content)
                     
         state["retrieved_docs"] = [{"content": doc.page_content, "metadata": doc.metadata} for doc in all_docs]
+        for doc in all_docs:
+            doc.metadata["product_line"] = "ECU-800"
         context_parts = [f"[ECU-800: {doc.metadata.get('source', 'U')}]{doc.page_content}" for doc in all_docs]
-        state["retrieved_context"] = " ".join(context_parts)
+        state["retrieved_context"] = "\n\n".join(context_parts)
         state["messages"].append(AIMessage(content=f"Retrieved {len(all_docs)} from ECU-800"))
 
-        # Update metadata with result
         langfuse_context.update_current_observation(
-            output={
-                "retrieved_docs_count": len(all_docs),
-                "product_line": "ECU-800"
-            }
+            output={"retrieved_docs_count": len(all_docs), "product_line": "ECU-800"}
         )
-
         return state
 
     @observe()
@@ -291,64 +351,60 @@ class ECUQueryAgent:
             }
         )
 
-        # Retrieve dynamic callback handler from current context if available
-        callbacks = [langfuse_context.get_current_langchain_handler()] if self.langfuse_enabled else []
-
         print(f"DEBUG: Parallel retrieval started for product_line={state['detected_product_line']}, queries={queries}")
 
-        from concurrent.futures import ThreadPoolExecutor
+        # OPTIMIZATION: BATCH EMBEDDING
+        try:
+            embeddings_obj = (self.ecu800_retriever.vector_retriever.vectorstore.embeddings 
+                             if self.ecu800_retriever 
+                             else self.ecu700_retriever.vector_retriever.vectorstore.embeddings)
+            query_vectors = embeddings_obj.embed_documents(queries)
+        except Exception as e:
+            print(f"ERROR in batch embedding: {e}. Falling back to sequential.")
+            query_vectors = None
 
-        def retrieve_from_store(retriever, query):
-            if retriever is None:
-                return []
-            try:
-                return retriever.invoke(query, config={"callbacks": callbacks} if callbacks else {})
-            except Exception as e:
-                print(f"ERROR in parallel retrieval: {e}")
-                return []
+        if query_vectors:
+            from concurrent.futures import ThreadPoolExecutor
+            def search_by_vector(retriever, vector, k):
+                if retriever is None: return []
+                try: return retriever.vector_retriever.vectorstore.similarity_search_by_vector(vector, k=k)
+                except Exception as e: return []
 
-        # Execute retrievals in parallel
-        all_futures = []
-        with ThreadPoolExecutor(max_workers=len(queries) * 2) as executor:
-            # Add ECU700 retrievals
-            if self.ecu700_retriever:
-                for q in queries:
-                    all_futures.append(executor.submit(retrieve_from_store, self.ecu700_retriever, q))
-            
-            # Add ECU800 retrievals
-            if self.ecu800_retriever:
-                for q in queries:
-                    all_futures.append(executor.submit(retrieve_from_store, self.ecu800_retriever, q))
+            all_futures = []
+            with ThreadPoolExecutor(max_workers=len(queries) * 2) as executor:
+                for vector in query_vectors:
+                    if self.ecu700_retriever:
+                        all_futures.append(executor.submit(search_by_vector, self.ecu700_retriever, vector, k=8))
+                    if self.ecu800_retriever:
+                        all_futures.append(executor.submit(search_by_vector, self.ecu800_retriever, vector, k=12))
 
-            # Wait for all and collect results
-            for future in all_futures:
-                res = future.result()
-                for doc in res:
-                    if doc.page_content not in seen_content:
-                        final_docs_list.append(doc)
-                        seen_content.add(doc.page_content)
+                for future in all_futures:
+                    for doc in future.result():
+                        if doc.page_content not in seen_content:
+                            # Robust line detection from source filename if metadata is missing
+                            source = doc.metadata.get("source", "")
+                            line_tag = "ECU-700" if "700" in source else "ECU-800" if "800" in source else "ECU-GENERIC"
+                            doc.metadata["product_line"] = line_tag # Enrich for state
+                            final_docs_list.append(doc)
+                            seen_content.add(doc.page_content)
+        else: pass
 
         state["retrieved_docs"] = [{"content": doc.page_content, "metadata": doc.metadata} for doc in final_docs_list]
         
-        # Group contexts by product line for synthesis
-        contexts_700 = [f"[ECU-700: {doc.metadata.get('source', 'U')}]{doc.page_content}" 
-                        for doc in final_docs_list if doc.metadata.get("product_line") == "ECU-700"]
-        contexts_800 = [f"[ECU-800: {doc.metadata.get('source', 'U')}]{doc.page_content}" 
-                        for doc in final_docs_list if doc.metadata.get("product_line") == "ECU-800"]
-        
-        state["retrieved_context"] = " ".join(contexts_700 + contexts_800)
-        state["messages"].append(AIMessage(content=f"Parallel retrieval complete. Found {len(final_docs_list)} documents."))
-        
-        print(f"DEBUG: Parallel retrieval complete. Total unique docs: {len(final_docs_list)}")
+        # Build context by prepending tags
+        context_parts = []
+        for doc in final_docs_list:
+            line_tag = doc.metadata.get("product_line", "UNKNOWN")
+            source = doc.metadata.get("source", "U")
+            context_parts.append(f"[{line_tag}: {source}]{doc.page_content}")
+            
+        state["retrieved_context"] = "\n\n".join(context_parts)
+        state["messages"].append(AIMessage(content=f"Batch-optimized retrieval complete. Found {len(final_docs_list)} docs."))
         
         # Update metadata with result
         langfuse_context.update_current_observation(
-            output={
-                "retrieved_docs_count": len(final_docs_list),
-                "product_line": state["detected_product_line"]
-            }
+            output={"retrieved_docs_count": len(final_docs_list), "product_line": state["detected_product_line"]}
         )
-
         return state
 
     @observe()
@@ -408,6 +464,36 @@ class ECUQueryAgent:
         workflow.add_edge("parallel_retrieval", "synthesize_response")
         workflow.add_edge("synthesize_response", END)
         return workflow.compile()
+
+    def predict(self, model_input: Any) -> List[Dict[str, Any]]:
+        """
+        Predict method matching MLflow pyfunc interface for backward compatibility.
+        
+        Args:
+            model_input: Pandas DataFrame or Dict containing 'query'
+            
+        Returns:
+            List containing agent response and metadata
+        """
+        import pandas as pd
+        if isinstance(model_input, pd.DataFrame):
+            query = model_input["query"].iloc[0]
+        elif isinstance(model_input, dict):
+            query = model_input.get("query", "")
+        else:
+            query = str(model_input)
+            
+        # Get result from agent
+        result = self.invoke(query)
+        
+        # Format for MLflow-compatible response
+        return [{
+            "response": result.get("response", ""),
+            "detected_product_line": result.get("detected_product_line", "unknown"),
+            "retrieved_docs_count": result.get("retrieved_docs_count", 0),
+            "trace_id": result.get("trace_id", ""),
+            "status": "success"
+        }]
 
     @observe(name="ECU Agent Query")
     def invoke(self, query: str, session_id: str = None, user_id: str = None) -> dict:

@@ -13,6 +13,8 @@ from langchain_core.vectorstores import VectorStoreRetriever
 from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
 from me_ecu_agent.config import RetrievalConfig
+from me_ecu_agent.model_config import get_embeddings_config
+from me_ecu_agent.qwen_embeddings import QwenEmbeddings
 
 
 class VectorStoreManager:
@@ -21,7 +23,25 @@ class VectorStoreManager:
     def __init__(self, config: RetrievalConfig = None):
         """Initialize VectorStoreManager with configuration."""
         self.config = config or RetrievalConfig()
-        self.embeddings = OpenAIEmbeddings()
+        
+        # Get dynamic embeddings configuration
+        embed_config = get_embeddings_config()
+
+        # Initialize embeddings based on provider
+        if embed_config.is_qwen():
+            # Use Qwen-specific embeddings wrapper
+            self.embeddings = QwenEmbeddings(
+                model=embed_config.model_name,
+                qwen_api_key=embed_config.api_key,
+                base_url=embed_config.base_url
+            )
+        else:
+            # Standard OpenAI embeddings
+            self.embeddings = OpenAIEmbeddings(
+                model=embed_config.model_name,
+                api_key=embed_config.api_key,
+                base_url=embed_config.base_url
+            )
         self._ecu700_store: Optional[FAISS] = None
         self._ecu800_store: Optional[FAISS] = None
 
@@ -120,13 +140,30 @@ def save_vector_stores(store_700, store_800, directory: str) -> None:
 
 def load_vector_stores(directory: str):
     """Load vector stores from directory (backward compatibility)."""
-    from langchain_openai import OpenAIEmbeddings
-
     save_path = Path(directory)
     if not save_path.exists():
         raise FileNotFoundError(f"Directory not found: {directory}")
 
-    embeddings = OpenAIEmbeddings()
+    # Use centralized config for backward compatibility functions
+    from me_ecu_agent.model_config import get_embeddings_config
+    embed_config = get_embeddings_config()
+
+    # Initialize embeddings based on provider
+    if embed_config.is_qwen():
+        # Use Qwen-specific embeddings wrapper
+        embeddings = QwenEmbeddings(
+            model=embed_config.model_name,
+            qwen_api_key=embed_config.api_key,
+            base_url=embed_config.base_url
+        )
+    else:
+        # Standard OpenAI embeddings
+        from langchain_openai import OpenAIEmbeddings
+        embeddings = OpenAIEmbeddings(
+            model=embed_config.model_name,
+            api_key=embed_config.api_key,
+            base_url=embed_config.base_url
+        )
     store_700 = None
     store_800 = None
 

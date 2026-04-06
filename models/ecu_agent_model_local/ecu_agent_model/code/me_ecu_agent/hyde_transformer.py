@@ -23,7 +23,14 @@ class HyDETransformer:
     """
 
     def __init__(self):
-        self.llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.0)
+        from me_ecu_agent.model_config import get_model_config
+        model_config = get_model_config()
+        self.llm = ChatOpenAI(
+            model=model_config.model_name,
+            api_key=model_config.api_key,
+            base_url=model_config.base_url,
+            temperature=0.0
+        )
 
         # HyDE prompt for generating hypothetical answers
         self.hyde_prompt = ChatPromptTemplate.from_messages([
