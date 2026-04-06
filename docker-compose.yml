@@ -29,7 +29,9 @@ services:
       - ./data:/data:ro
       # Mount local model artifacts
       - ./models:/models:ro
-      # Mount source code for development (optional)
+      # Mount source code to override MLflow packaged code
+      - ./src/me_ecu_agent:/models/ecu_agent_model_local/ecu_agent_model/code/me_ecu_agent:ro
+      # Mount web files
       - ./web/api_server.py:/app/api_server.py:ro
       - ./web/config.py:/app/config.py:ro
       - ./web/index.html:/app/index.html:ro

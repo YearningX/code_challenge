@@ -30,13 +30,19 @@ def setup_agent():
     return agent
 
 
-def llm_judge_evaluate(question, response, expected):
+def llm_judge_evaluate(question, response, expected, context=""):
     """
-    Use GPT-4 to evaluate the response quality.
+    Use configured LLM (e.g., GPT-4 or Qwen-plus) to evaluate the response quality.
 
     Returns a score between 0 and 1.
     """
-    client = OpenAI()
+    from me_ecu_agent.model_config import get_model_config
+    model_config = get_model_config()
+
+    client = OpenAI(
+        api_key=model_config.api_key,
+        base_url=model_config.base_url
+    )
 
     evaluation_prompt = f"""You are an expert evaluator for a RAG (Retrieval-Augmented Generation) system.
 
@@ -44,7 +50,7 @@ Your task is to evaluate how well the Actual Answer answers the Question compare
 
 **Evaluation Criteria:**
 
-1. **Correctness (40% weight)**: Is the information in the Actual Answer factually correct?
+1. **Correctness (40% weight)**: Is the information in the Actual Answer factually correct according to the Context? 
 2. **Completeness (30% weight)**: Does the Actual Answer include all relevant information from the Expected Answer?
 3. **Relevance (20% weight)**: Is the Actual Answer relevant to the question?
 4. **Clarity (10% weight)**: Is the Actual Answer clear and well-structured?
@@ -58,14 +64,16 @@ Your task is to evaluate how well the Actual Answer answers the Question compare
 - **0.0-0.1 (Very Poor)**: The Actual Answer is completely wrong or doesn't address the question.
 
 **Important Notes:**
-- Focus on the INFORMATION content, not the exact wording
-- If the Actual Answer provides correct information in a different way, that's OK
-- If the Expected Answer includes information not directly asked in the question, don't penalize the Actual Answer for omitting it
-- Technical accuracy is more important than matching exact phrases
+- Focus on the INFORMATION content, not the exact wording.
+- Use the provided Context to verify technical accuracy.
+- If the Actual Answer provides correct information present in the Context but NOT in the Expected Answer, DO NOT penalize it; reward accuracy.
+- If the Expected Answer includes information not directly asked in the question, don't penalize the Actual Answer for omitting it.
 
 **Input:**
 
 Question: {question}
+
+Context: {context}
 
 Expected Answer: {expected}
 
@@ -82,13 +90,13 @@ Provide ONLY the score and reasoning, nothing else.
 
     try:
         completion = client.chat.completions.create(
-            model="gpt-4.1",  # Using GPT-4 for best evaluation
+            model=model_config.model_name,
             messages=[
                 {"role": "system", "content": "You are an expert evaluator for RAG systems."},
                 {"role": "user", "content": evaluation_prompt}
             ],
             temperature=0.0,  # Consistent evaluation
-            max_tokens=200
+            max_tokens=500
         )
 
         result = completion.choices[0].message.content.strip()
@@ -137,7 +145,8 @@ def test_all_questions_with_llm_judge(agent, questions_file):
             print(f"Response: {response[:200]}...")
 
             # Use GPT-4 as judge
-            score, reasoning = llm_judge_evaluate(question, response, expected)
+            context = result.get('retrieved_context', '')
+            score, reasoning = llm_judge_evaluate(question, response, expected, context)
 
             print(f"Score: {score:.2f}")
             print(f"Reasoning: {reasoning.split('Reasoning:')[1].strip() if 'Reasoning:' in reasoning else 'N/A'}")

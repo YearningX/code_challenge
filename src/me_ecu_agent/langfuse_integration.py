@@ -44,7 +44,12 @@ class LangfuseIntegration:
         # Get credentials from params or environment
         secret_key = secret_key or os.getenv("LANGFUSE_SECRET_KEY")
         public_key = public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
-        base_url = base_url or os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+        # Standard Langfuse 2.0 uses LANGFUSE_HOST; we support both
+        base_url = base_url or os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+        
+        # Ensure HOST is set for the @observe decorator to pick up the correct server
+        if os.getenv("LANGFUSE_HOST") is None:
+            os.environ["LANGFUSE_HOST"] = base_url
 
         if not secret_key or not public_key:
             print("Warning: Langfuse credentials not provided. Tracing disabled.")

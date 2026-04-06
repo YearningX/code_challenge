@@ -11,10 +11,20 @@ from langchain_core.vectorstores import VectorStoreRetriever
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from me_ecu_agent.config import LLMConfig, LangfuseConfig
+from me_ecu_agent.model_config import get_model_config
 from me_ecu_agent.query_expansion import create_query_expander
 from me_ecu_agent.hyde_retriever import create_hyde_retriever
 from me_ecu_agent.hybrid_retrieval import create_hybrid_retriever
 from me_ecu_agent.langfuse_integration import initialize_langfuse
+
+# Import Langfuse LangChain callback handler and decorators
+try:
+    from langfuse.callback import CallbackHandler
+    from langfuse.decorators import observe, langfuse_context
+    LANGFUSE_AVAILABLE = True
+except ImportError:
+    LANGFUSE_AVAILABLE = False
+    print("Warning: langfuse not available. Install langfuse for detailed tracing.")
 
 
 class AgentState(TypedDict):
@@ -31,15 +41,31 @@ class ECUQueryAgent:
     """Enhanced with HyDE (Hypothetical Document Embeddings) and Langfuse Tracing."""
 
     def __init__(self, config: LLMConfig = None, langfuse_config: LangfuseConfig = None):
+        # Initialize configuration from environment via model_config.py
+        model_config = get_model_config()
+        
+        # Merge LLMConfig with environment-based settings
         self.config = config or LLMConfig()
+        # Override defaults with environment values if they weren't explicitly provided
+        if config is None:
+            self.config.model_name = model_config.model_name
+            self.config.temperature = model_config.temperature
+
         self.langfuse_config = langfuse_config or LangfuseConfig()
 
-        # Initialize LLM
-        self.llm = ChatOpenAI(model=self.config.model_name, temperature=self.config.temperature)
+        # Initialize LLM with full parameters from model_config (API key, base URL, etc.)
+        self.llm = ChatOpenAI(
+            model=model_config.model_name,
+            api_key=model_config.api_key,
+            base_url=model_config.base_url,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens
+        )
 
         # Initialize Langfuse if enabled
         self.langfuse = None
         self.langfuse_enabled = False
+        self.langfuse_callback_handler = None
 
         print(f"\n{'='*60}")
         print(f"ECUQueryAgent - Langfuse Configuration")
@@ -58,21 +84,28 @@ class ECUQueryAgent:
                     base_url=self.langfuse_config.base_url
                 )
                 self.langfuse_enabled = self.langfuse.enabled if self.langfuse else False
+
+                # LangChain callback handler will be retrieved dynamically from langfuse_context
+                # to ensure correct nesting under nodes decorated with @observe
                 if self.langfuse_enabled:
-                    print("✓ Langfuse tracing initialized successfully")
+                    print("[OK] Langfuse tracing initialized successfully")
                 else:
-                    print("✗ Langfuse initialized but not enabled")
+                    print("[WARN] Langfuse initialized but not enabled")
             except Exception as e:
-                print(f"✗ Failed to initialize Langfuse: {e}")
+                print(f"[ERROR] Failed to initialize Langfuse: {e}")
         else:
             print("Langfuse disabled in configuration")
         print(f"Final langfuse_enabled: {self.langfuse_enabled}")
+        print(f"LangChain callback available: {self.langfuse_callback_handler is not None}")
         print(f"{'='*60}\n")
 
         # Initialize query expander and retrievers
         self.query_expander = create_query_expander()
         self.ecu700_retriever: Optional[VectorStoreRetriever] = None
         self.ecu800_retriever: Optional[VectorStoreRetriever] = None
+
+        # Agent observation for current trace (will be set during invoke)
+        self.agent_observation = None
 
         # OPTIMIZED: Enhanced query analysis prompt
         self.query_analysis_prompt = ChatPromptTemplate.from_messages([
@@ -108,6 +141,7 @@ class ECUQueryAgent:
              "   - For specs with multiple states (idle/load, min/max): Include ALL states. " +
              "4. Use exact numbers and units from context. " +
              "5. Only use provided information - do not hallucinate. " +
+             "6. STRICT REQUIREMENT: DO NOT use any emojis (like ✅, ➡️, etc.). Use standard professional text only. " +
              "Context: {context}."),
             ("human", "{query}")
         ])
@@ -121,14 +155,23 @@ class ECUQueryAgent:
         else:
             raise ValueError(f"Invalid product_line: {product_line}")
 
+    @observe()
     def _analyze_query(self, state: AgentState) -> AgentState:
         query = state["query"]
         expanded = self.query_expander.expand(query)
         state["rewritten_query"] = expanded
-        
+
+        # Update observation with metadata
+        langfuse_context.update_current_observation(
+            input={"query": query}
+        )
+
+        # Retrieve dynamic callback handler from current context if available
+        callbacks = [langfuse_context.get_current_langchain_handler()] if self.langfuse_enabled else []
+
         # Use expanded queries for better retrieval
         chain = self.query_analysis_prompt | self.llm
-        result = chain.invoke({"query": query})
+        result = chain.invoke({"query": query}, config={"callbacks": callbacks} if callbacks else {})
         detected = result.content.strip().lower()
         if "ecu-700" in detected or "700" in detected:
             state["detected_product_line"] = "ECU-700"
@@ -139,98 +182,204 @@ class ECUQueryAgent:
         else:
             state["detected_product_line"] = "unknown"
         state["messages"].append(AIMessage(content=f"Detected: {state['detected_product_line']}"))
+
+        # Update metadata with result
+        langfuse_context.update_current_observation(
+            output={"detected_product_line": state["detected_product_line"]}
+        )
+
         return state
 
+    @observe()
     def _retrieve_ecu700(self, state: AgentState) -> AgentState:
         if self.ecu700_retriever is None:
             state["retrieved_context"] = "Error: ECU-700 retriever not registered"
             return state
+        
+        # Update observation with metadata
+        langfuse_context.update_current_observation(
+            input={"rewritten_query": state.get("rewritten_query", state["query"])}
+        )
+
+        # Retrieve dynamic callback handler from current context if available
+        callbacks = [langfuse_context.get_current_langchain_handler()] if self.langfuse_enabled else []
         
         # Support both single string and list of strings
         queries = state["rewritten_query"] if isinstance(state["rewritten_query"], list) else [state["query"]]
         all_docs = []
         seen_content = set()
         
-        for q in queries:
-            docs = self.ecu700_retriever.invoke(q)
-            for doc in docs:
-                if doc.page_content not in seen_content:
-                    all_docs.append(doc)
-                    seen_content.add(doc.page_content)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(queries)) as executor:
+            futures = [executor.submit(self.ecu700_retriever.invoke, q, config={"callbacks": callbacks} if callbacks else {}) for q in queries]
+            for future in futures:
+                docs = future.result()
+                for doc in docs:
+                    if doc.page_content not in seen_content:
+                        all_docs.append(doc)
+                        seen_content.add(doc.page_content)
         
         state["retrieved_docs"] = [{"content": doc.page_content, "metadata": doc.metadata} for doc in all_docs]
         context_parts = [f"[ECU-700: {doc.metadata.get('source', 'U')}]{doc.page_content}" for doc in all_docs]
         state["retrieved_context"] = " ".join(context_parts)
         state["messages"].append(AIMessage(content=f"Retrieved {len(all_docs)} from ECU-700"))
+
+        # Update metadata with result
+        langfuse_context.update_current_observation(
+            output={
+                "retrieved_docs_count": len(all_docs),
+                "product_line": "ECU-700"
+            }
+        )
+
         return state
 
+    @observe()
     def _retrieve_ecu800(self, state: AgentState) -> AgentState:
         if self.ecu800_retriever is None:
             state["retrieved_context"] = "Error: ECU-800 retriever not registered"
             return state
             
+        # Update observation with metadata
+        langfuse_context.update_current_observation(
+            input={"rewritten_query": state.get("rewritten_query", state["query"])}
+        )
+
+        # Retrieve dynamic callback handler from current context if available
+        callbacks = [langfuse_context.get_current_langchain_handler()] if self.langfuse_enabled else []
+
         queries = state["rewritten_query"] if isinstance(state["rewritten_query"], list) else [state["query"]]
         all_docs = []
         seen_content = set()
         
-        for q in queries:
-            docs = self.ecu800_retriever.invoke(q)
-            for doc in docs:
-                if doc.page_content not in seen_content:
-                    all_docs.append(doc)
-                    seen_content.add(doc.page_content)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(queries)) as executor:
+            futures = [executor.submit(self.ecu800_retriever.invoke, q, config={"callbacks": callbacks} if callbacks else {}) for q in queries]
+            for future in futures:
+                docs = future.result()
+                for doc in docs:
+                    if doc.page_content not in seen_content:
+                        all_docs.append(doc)
+                        seen_content.add(doc.page_content)
                     
         state["retrieved_docs"] = [{"content": doc.page_content, "metadata": doc.metadata} for doc in all_docs]
         context_parts = [f"[ECU-800: {doc.metadata.get('source', 'U')}]{doc.page_content}" for doc in all_docs]
         state["retrieved_context"] = " ".join(context_parts)
         state["messages"].append(AIMessage(content=f"Retrieved {len(all_docs)} from ECU-800"))
+
+        # Update metadata with result
+        langfuse_context.update_current_observation(
+            output={
+                "retrieved_docs_count": len(all_docs),
+                "product_line": "ECU-800"
+            }
+        )
+
         return state
 
+    @observe()
     def _parallel_retrieval(self, state: AgentState) -> AgentState:
         queries = state["rewritten_query"] if isinstance(state["rewritten_query"], list) else [state["query"]]
         final_docs_list = []
-        contexts = []
         seen_content = set()
         
+        # Update observation with metadata
+        langfuse_context.update_current_observation(
+            input={
+                "rewritten_query": state.get("rewritten_query", state["query"]),
+                "product_line": state["detected_product_line"]
+            }
+        )
+
+        # Retrieve dynamic callback handler from current context if available
+        callbacks = [langfuse_context.get_current_langchain_handler()] if self.langfuse_enabled else []
+
         print(f"DEBUG: Parallel retrieval started for product_line={state['detected_product_line']}, queries={queries}")
 
-        if self.ecu700_retriever is not None:
-            docs_700 = []
-            for q in queries:
-                print(f"DEBUG: Invoking ECU700 retriever for: {q}")
-                res = self.ecu700_retriever.invoke(q)
-                print(f"DEBUG: ECU700 retriever returned {len(res)} results")
+        from concurrent.futures import ThreadPoolExecutor
+
+        def retrieve_from_store(retriever, query):
+            if retriever is None:
+                return []
+            try:
+                return retriever.invoke(query, config={"callbacks": callbacks} if callbacks else {})
+            except Exception as e:
+                print(f"ERROR in parallel retrieval: {e}")
+                return []
+
+        # Execute retrievals in parallel
+        all_futures = []
+        with ThreadPoolExecutor(max_workers=len(queries) * 2) as executor:
+            # Add ECU700 retrievals
+            if self.ecu700_retriever:
+                for q in queries:
+                    all_futures.append(executor.submit(retrieve_from_store, self.ecu700_retriever, q))
+            
+            # Add ECU800 retrievals
+            if self.ecu800_retriever:
+                for q in queries:
+                    all_futures.append(executor.submit(retrieve_from_store, self.ecu800_retriever, q))
+
+            # Wait for all and collect results
+            for future in all_futures:
+                res = future.result()
                 for doc in res:
                     if doc.page_content not in seen_content:
-                        docs_700.append(doc)
+                        final_docs_list.append(doc)
                         seen_content.add(doc.page_content)
-            final_docs_list.extend([{"content": doc.page_content, "metadata": doc.metadata} for doc in docs_700])
-            contexts.append(" ".join([f"[ECU-700: {doc.metadata.get('source', 'U')}]{doc.page_content}" for doc in docs_700]))
-            
-        if self.ecu800_retriever is not None:
-            docs_800 = []
-            for q in queries:
-                print(f"DEBUG: Invoking ECU800 retriever for: {q}")
-                res = self.ecu800_retriever.invoke(q)
-                print(f"DEBUG: ECU800 retriever returned {len(res)} results")
-                for doc in res:
-                    if doc.page_content not in seen_content:
-                        docs_800.append(doc)
-                        seen_content.add(doc.page_content)
-            final_docs_list.extend([{"content": doc.page_content, "metadata": doc.metadata} for doc in docs_800])
-            contexts.append(" ".join([f"[ECU-800: {doc.metadata.get('source', 'U')}]{doc.page_content}" for doc in docs_800]))
-            
+
+        state["retrieved_docs"] = [{"content": doc.page_content, "metadata": doc.metadata} for doc in final_docs_list]
+        
+        # Group contexts by product line for synthesis
+        contexts_700 = [f"[ECU-700: {doc.metadata.get('source', 'U')}]{doc.page_content}" 
+                        for doc in final_docs_list if doc.metadata.get("product_line") == "ECU-700"]
+        contexts_800 = [f"[ECU-800: {doc.metadata.get('source', 'U')}]{doc.page_content}" 
+                        for doc in final_docs_list if doc.metadata.get("product_line") == "ECU-800"]
+        
+        state["retrieved_context"] = " ".join(contexts_700 + contexts_800)
+        state["messages"].append(AIMessage(content=f"Parallel retrieval complete. Found {len(final_docs_list)} documents."))
+        
         print(f"DEBUG: Parallel retrieval complete. Total unique docs: {len(final_docs_list)}")
-        state["retrieved_docs"] = final_docs_list
-        state["retrieved_context"] = " ".join(contexts)
-        state["messages"].append(AIMessage(content=f"Parallel retrieval complete: {len(final_docs_list)} docs retrieved from documentation"))
+        
+        # Update metadata with result
+        langfuse_context.update_current_observation(
+            output={
+                "retrieved_docs_count": len(final_docs_list),
+                "product_line": state["detected_product_line"]
+            }
+        )
+
         return state
 
+    @observe()
     def _synthesize_response(self, state: AgentState) -> AgentState:
+        # Update observation with metadata
+        langfuse_context.update_current_observation(
+            input={
+                "query": state["query"],
+                "retrieved_docs_count": len(state.get("retrieved_docs", []))
+            }
+        )
+
+        # Retrieve dynamic callback handler from current context if available
+        callbacks = [langfuse_context.get_current_langchain_handler()] if self.langfuse_enabled else []
+
         chain = self.response_synthesis_prompt | self.llm
-        result = chain.invoke({"query": state["query"], "context": state["retrieved_context"]})
+        result = chain.invoke(
+            {"query": state["query"], "context": state["retrieved_context"]},
+            config={"callbacks": callbacks} if callbacks else {}
+        )
         state["response"] = result.content
         state["messages"].append(AIMessage(content=state["response"]))
+
+        # Update metadata with result
+        langfuse_context.update_current_observation(
+            output={
+                "response": state["response"][:1000],
+                "response_length": len(state["response"])
+            }
+        )
+
         return state
 
     def _route_to_retriever(self, state: AgentState) -> str:
@@ -260,9 +409,10 @@ class ECUQueryAgent:
         workflow.add_edge("synthesize_response", END)
         return workflow.compile()
 
+    @observe(name="ECU Agent Query")
     def invoke(self, query: str, session_id: str = None, user_id: str = None) -> dict:
         """
-        Invoke the ECU agent with Langfuse tracing.
+        Invoke the ECU agent with Langfuse tracing via @observe decorator.
 
         Args:
             query: User query string
@@ -275,26 +425,13 @@ class ECUQueryAgent:
         if self.ecu700_retriever is None and self.ecu800_retriever is None:
             raise ValueError("At least one retriever must be registered")
 
-        # Start Langfuse trace
-        trace = None
-        trace_id = None
-        start_time = time.time()
+        # Update trace metadata
+        langfuse_context.update_current_trace(
+            session_id=session_id or self.langfuse_config.session_id,
+            user_id=user_id or self.langfuse_config.user_id,
+        )
 
-        if self.langfuse_enabled and self.langfuse:
-            try:
-                trace = self.langfuse.client.trace(
-                    name="ecu_agent_query",
-                    input={"query": query},  # Set input properly
-                    session_id=session_id or self.langfuse_config.session_id,
-                    user_id=user_id or self.langfuse_config.user_id,
-                    metadata={
-                        **(self.langfuse_config.metadata or {}),
-                    }
-                )
-                trace_id = trace.id if trace else None  # Langfuse 2.x uses 'id' attribute
-            except Exception as e:
-                print(f"Error creating Langfuse trace: {e}")
-                trace = None
+        start_time = time.time()
 
         try:
             # Create and invoke graph
@@ -309,73 +446,42 @@ class ECUQueryAgent:
                 messages=[HumanMessage(content=query)]
             )
 
-            # Create execution span if trace exists
-            span = None
-            if trace:
-                try:
-                    span = trace.span(
-                        name="graph_execution",
-                        input={"query": query}
-                    )
-                except Exception as e:
-                    print(f"Error creating span: {e}")
+            # Retrieve dynamic callback handler for graph invocation
+            config = {}
+            if self.langfuse_enabled:
+                config["callbacks"] = [langfuse_context.get_current_langchain_handler()]
 
-            # Invoke graph
-            result = graph.invoke(initial_state)
+            result = graph.invoke(initial_state, config=config)
 
             # Calculate total duration
             duration = time.time() - start_time
 
-            # Update span with results
-            if span:
-                try:
-                    span.update(
-                        output={
-                            "response": result.get("response", "")[:500],
-                            "detected_product_line": result.get("detected_product_line"),
-                            "retrieved_docs_count": len(result.get("retrieved_docs", [])),
-                            "duration_seconds": round(duration, 2)
-                        },
-                        end_time=start_time + duration
-                    )
-                    span.end()
-                except Exception as e:
-                    print(f"Error updating span: {e}")
-
             # Update trace with final results
-            if trace:
-                try:
-                    trace.update(
-                        output={
-                            "response": result.get("response", "")[:1000],
-                            "detected_product_line": result.get("detected_product_line"),
-                            "retrieved_docs_count": len(result.get("retrieved_docs", [])),
-                            "duration_seconds": round(duration, 2)
-                        },
-                        level="DEFAULT",
-                        status_message="Success",
-                        end_time=start_time + duration
-                    )
-                except Exception as e:
-                    print(f"Error updating Langfuse trace: {e}")
+            langfuse_context.update_current_trace(
+                output={
+                    "response": result.get("response", "")[:1000],
+                    "detected_product_line": result.get("detected_product_line"),
+                    "retrieved_docs_count": len(result.get("retrieved_docs", [])),
+                    "duration_seconds": round(duration, 2)
+                }
+            )
 
-            # Add trace_id to result
-            result["trace_id"] = trace_id
+            # Add trace details to result
+            result["trace_id"] = langfuse_context.get_current_trace_id()
             result["langfuse_enabled"] = self.langfuse_enabled
             result["duration"] = duration
+
+            # Explicitly flush Langfuse traces to ensure they are available in the UI immediately
+            if self.langfuse and hasattr(self.langfuse, 'flush'):
+                self.langfuse.flush()
 
             return result
 
         except Exception as e:
-            # Update trace with error
-            if trace:
-                try:
-                    trace.update(
-                        level="ERROR",
-                        status_message=str(e)
-                    )
-                except:
-                    pass
-
+            # Update observation with error details
+            langfuse_context.update_current_observation(
+                level="ERROR",
+                status_message=str(e)
+            )
             # Re-raise the exception
             raise

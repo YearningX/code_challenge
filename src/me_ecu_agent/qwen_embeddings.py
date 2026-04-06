@@ -1,116 +1,87 @@
 """
-Qwen Embeddings - Custom implementation for LangChain compatibility
+Qwen Embeddings Wrapper
 
-直接调用 Qwen/Alibaba Cloud 的 embeddings API，不依赖 OpenAI 格式。
+Compatible implementation for Qwen (DashScope) embeddings API.
+Works around OpenAI SDK format incompatibilities.
 """
 
 import os
 from typing import List
-from langchain.embeddings.base import Embeddings
-from pydantic import BaseModel, Field
+from langchain_core.embeddings import Embeddings
+from langchain_openai import OpenAIEmbeddings
 
 
-class QwenEmbeddings(BaseModel, Embeddings):
+class QwenEmbeddings(Embeddings):
     """
-    Qwen embeddings implementation for LangChain.
+    Qwen-specific embeddings wrapper that handles API compatibility.
 
-    直接调用 DashScope API，使用 Qwen 的 text-embedding-v2 模型。
+    Qwen API has some differences from standard OpenAI API format.
+    This wrapper ensures proper request formatting.
     """
 
-    # Qwen API configuration
-    api_key: str = Field(..., description="Qwen/DashScope API key")
-    base_url: str = Field(
-        default="https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding",
-        description="Qwen embeddings API endpoint"
-    )
-    model: str = Field(default="text-embedding-v2", description="Embedding model name")
+    def __init__(
+        self,
+        model: str = "text-embedding-v2",
+        qwen_api_key: str = None,
+        base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    ):
+        self.model = model
+        self.api_key = qwen_api_key or os.getenv("QWEN_API_KEY")
+        self.base_url = base_url
 
-    class Config:
-        arbitrary_types_allowed = True
-
-    def _embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """Embed a list of documents."""
-        import requests
-
-        embeddings = []
-        for text in texts:
-            try:
-                response = requests.post(
-                    self.base_url,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": self.model,
-                        "input": {
-                            "texts": [text]
-                        }
-                    },
-                    timeout=30
-                )
-
-                if response.status_code == 200:
-                    result = response.json()
-                    embedding = result["output"]["embeddings"][0]["embedding"]
-                    embeddings.append(embedding)
-                else:
-                    raise Exception(f"Qwen API error: {response.status_code} - {response.text}")
-
-            except Exception as e:
-                print(f"Error embedding document: {e}")
-                # Return zero vector on error
-                embeddings.append([0.0] * 1536)
-
-        return embeddings
-
-    def _embed_query(self, text: str) -> List[float]:
-        """Embed a query string."""
-        return self._embed_documents([text])[0]
+        # Initialize OpenAI embeddings with Qwen-compatible settings
+        self._embeddings = OpenAIEmbeddings(
+            model=model,
+            api_key=self.api_key,
+            base_url=base_url,
+            # Qwen-specific: don't send extra parameters
+        )
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """Embed a list of documents using Qwen API.
-
-        Args:
-            texts: List of text documents to embed
-
-        Returns:
-            List of embedding vectors
-        """
-        print(f"Embedding {len(texts)} documents with Qwen {self.model}...")
-        return self._embed_documents(texts)
+        """Embed search documents."""
+        try:
+            # Call OpenAI embeddings - it will format for Qwen
+            return self._embeddings.embed_documents(texts)
+        except Exception as e:
+            # If OpenAI SDK fails, try manual request
+            return self._embed_with_fallback(texts)
 
     def embed_query(self, text: str) -> List[float]:
-        """Embed a query text using Qwen API.
+        """Embed query text."""
+        try:
+            return self._embeddings.embed_query(text)
+        except Exception as e:
+            # If OpenAI SDK fails, try manual request
+            return self._embed_with_fallback([text])[0]
 
-        Args:
-            text: Query text to embed
-
-        Returns:
-            Embedding vector
+    def _embed_with_fallback(self, texts: List[str]) -> List[List[float]]:
         """
-        return self._embed_query(text)
+        Fallback method using direct HTTP requests to Qwen API.
 
+        This bypasses OpenAI SDK formatting issues.
+        """
+        import requests
 
-def create_qwen_embeddings(api_key: str = None, base_url: str = None) -> QwenEmbeddings:
-    """
-    Factory function to create Qwen embeddings instance.
+        url = f"{self.base_url}/embeddings"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
 
-    Args:
-        api_key: Qwen API key (defaults to QWEN_API_KEY env var)
-        base_url: Custom base URL (optional)
+        # Qwen expects simple input format
+        data = {
+            "model": self.model,
+            "input": texts  # Qwen expects list of strings directly
+        }
 
-    Returns:
-        QwenEmbeddings instance
-    """
-    if api_key is None:
-        api_key = os.getenv("QWEN_API_KEY")
+        response = requests.post(url, json=data, headers=headers)
+        response.raise_for_status()
 
-    if not api_key:
-        raise ValueError("QWEN_API_KEY not configured")
+        result = response.json()
 
-    return QwenEmbeddings(
-        api_key=api_key,
-        base_url=base_url or "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding",
-        model="text-embedding-v2"
-    )
+        # Extract embeddings from response
+        embeddings = []
+        for item in result["data"]:
+            embeddings.append(item["embedding"])
+
+        return embeddings

@@ -140,7 +140,7 @@ class ECUAgentMLflowModel(PythonModel):
             )
 
             if self.agent.langfuse_enabled:
-                logger.info("✓ Agent initialized with Langfuse tracing")
+                logger.info("[OK] Agent initialized with Langfuse tracing")
             else:
                 logger.info("Agent initialized without Langfuse tracing")
 

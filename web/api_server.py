@@ -208,19 +208,19 @@ def generate_evaluation(llm_response: str, test_data: Dict[str, Any], retrieved_
     context_text = "\n".join([d.get('content', '')[:300] for d in (retrieved_docs or [])])
 
     try:
-        # Use config-based LLM for evaluation to respect provider settings
-        llm_model = os.getenv("LLM_MODEL", "qwen-turbo")
-        
-        # If using Qwen, configure evaluation LLM accordingly
-        if os.getenv("LLM_PROVIDER") == "qwen" or os.getenv("QWEN_API_KEY"):
-            eval_llm = ChatOpenAI(
-                model=llm_model, 
-                api_key=os.getenv("QWEN_API_KEY"),
-                base_url=os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-                temperature=0
-            )
-        else:
-            eval_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        # Import model config to get proper LLM configuration
+        from me_ecu_agent.model_config import get_model_config
+
+        # Use the same model configuration as the main agent
+        model_config = get_model_config()
+
+        # Create evaluation LLM with proper configuration
+        eval_llm = ChatOpenAI(
+            model=model_config.model_name,
+            api_key=model_config.api_key,
+            base_url=model_config.base_url,
+            temperature=0
+        )
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a Lead ECU Software Auditor. Evaluate the RAG system output.

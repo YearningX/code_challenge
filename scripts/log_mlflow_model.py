@@ -226,7 +226,9 @@ def validate_model(model_uri: str) -> bool:
         result = model.predict(test_query)
 
         if result and len(result) > 0:
-            logger.info(f"Model validation successful. Test response: {result[0][:100]}...")
+            # Result is a list of dictionaries with 'response' field
+            response_text = result[0].get("response", "")
+            logger.info(f"Model validation successful. Test response: {response_text[:100]}...")
             return True
         else:
             logger.warning("Model validation returned empty response")
@@ -249,7 +251,9 @@ def main():
         validate_environment()
 
         # Configure MLflow
-        mlflow.set_tracking_uri("sqlite:///mlflow.db")
+        # Use relative path for cross-platform compatibility
+        tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
+        mlflow.set_tracking_uri(tracking_uri)
         mlflow.set_experiment("ME_ECU_Assistant")
 
         logger.info("Starting MLflow model logging...")
@@ -309,29 +313,116 @@ def main():
             # Log validation result
             mlflow.log_metric("validation_passed", 1 if validation_passed else 0)
 
+            # ============================================================
+            # AUTO-SYNC: Copy new model to container mount point
+            # ============================================================
+            print("\n" + "="*60)
+            print("Auto-Sync: Deploying new model to container...")
+            print("="*60)
+
+            # Define paths
+            local_model_dir = Path("models/ecu_agent_model_local/ecu_agent_model")
+            backup_dir = Path("models/ecu_agent_model_local/ecu_agent_model.backup")
+
+            # Extract run ID from model URI
+            run_id = run.info.run_id
+            # MLflow stores models as: mlruns/<exp_id>/models/<model_id>/artifacts/
+            # The artifacts folder contains the model files directly
+            experiment_dirs = Path("mlruns").glob("*/")
+            new_model_path = None
+
+            for exp_dir in sorted(experiment_dirs, reverse=True):  # Latest first
+                # Find all model directories
+                for model_dir in exp_dir.glob("models/*/artifacts"):
+                    # Check if this model has vector stores (indicates our model)
+                    if list(model_dir.glob("artifacts/vector_stores_*")):
+                        # This is our model
+                        new_model_path = model_dir
+                        logger.info(f"Found latest model: {new_model_path}")
+                        break
+                if new_model_path:
+                    break
+
+            # Check if new model exists in MLflow
+            if new_model_path is None:
+                logger.warning("New model path not found in MLflow artifacts")
+                logger.info("Skipping auto-sync. Container will continue using old model.")
+                print("[WARN] New model path not found. Skipping auto-sync.")
+            elif not new_model_path.exists():
+                logger.warning(f"New model not found at {new_model_path}")
+                logger.info("Skipping auto-sync. Container will continue using old model.")
+                print("[WARN] New model path not found. Skipping auto-sync.")
+            else:
+                print(f"New model location: {new_model_path}")
+                print(f"Target location: {local_model_dir / 'artifacts'}")
+
+                # Find the vector store directory in the new model
+                vector_store_dirs = list(new_model_path.glob("artifacts/vector_stores_*"))
+                if not vector_store_dirs:
+                    logger.warning("No vector stores found in new model")
+                    print("[WARN] No vector stores found in new model. Skipping auto-sync.")
+                    return
+
+                new_vector_store = vector_store_dirs[0]
+                target_vector_store = local_model_dir / "artifacts" / new_vector_store.name
+
+                # Initialize backup variable
+                old_backup = None
+
+                # Backup existing vector store if it exists
+                if target_vector_store.exists():
+                    print(f"\n[1/3] Backing up existing vector store...")
+                    # Remove old backup if exists
+                    old_backup = target_vector_store.parent / (new_vector_store.name + ".backup")
+                    if old_backup.exists():
+                        shutil.rmtree(old_backup)
+                    # Create new backup
+                    shutil.copytree(target_vector_store, old_backup)
+                    print(f"     Backup created: {old_backup}")
+                else:
+                    print("\n[1/3] No existing vector store to backup (first deployment)")
+
+                # Remove old vector store directory
+                if target_vector_store.exists():
+                    print(f"\n[2/3] Removing old vector store...")
+                    shutil.rmtree(target_vector_store)
+                    print(f"     Removed: {target_vector_store}")
+
+                # Create target directory and copy new vector store
+                print(f"\n[3/3] Copying new vector store...")
+                target_vector_store.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(new_vector_store, target_vector_store)
+                print(f"     Copied to: {target_vector_store}")
+
+                print("\n" + "="*60)
+                print("[SUCCESS] Vector store auto-sync completed!")
+                print("="*60)
+                print(f"New vector store is now active at: {target_vector_store}")
+                print(f"Backup saved at: {old_backup if target_vector_store.exists() else 'N/A'}")
+                print("\nNext steps:")
+                print("  1. Restart container: docker compose restart ecu-assistant-api")
+                print("  2. Verify: curl http://localhost:18500/api/health")
+                print("\nTo rollback:")
+                if target_vector_store.exists():
+                    print(f"  mv {old_backup} {target_vector_store}")
+                else:
+                    print("  No backup to rollback")
+                print("="*60 + "\n")
+
             # Clean up temp directory
             logger.info(f"Cleaning up temp directory: {temp_vector_dir}")
             shutil.rmtree(temp_vector_dir)
 
-            # Print summary
+            # Print summary (simplified, details already shown above)
             print("\n" + "="*60)
-            print("[OK] Model Logged Successfully")
+            print("[OK] Vector Index Rebuild Completed")
             print("="*60)
             print(f"Model URI: {model_info.model_uri}")
             print(f"Run ID: {run.info.run_id}")
-            print(f"Experiment: ME_ECU_Assistant")
             print(f"Validation: {'[PASS]' if validation_passed else '[FAIL]'}")
-            print("\nModel Statistics:")
-            print(f"  - Total chunks: {len(ecu_700_docs) + len(ecu_800_docs)}")
-            print(f"  - ECU-700 chunks: {len(ecu_700_docs)}")
-            print(f"  - ECU-800 chunks: {len(ecu_800_docs)}")
-            print("\nTesting Commands:")
-            print(f'  import mlflow.pyfunc')
-            print(f'  model = mlflow.pyfunc.load_model("{model_info.model_uri}")')
-            print(f'  result = model.predict({{"query": "What is ECU-850?"}})')
-            print(f'  print(result)')
-            print("\nServing Command:")
-            print(f'  mlflow models serve -m "{model_info.model_uri}" -p 5000')
+            print(f"Total chunks: {len(ecu_700_docs) + len(ecu_800_docs)}")
+            print(f"  - ECU-700: {len(ecu_700_docs)} chunks")
+            print(f"  - ECU-800: {len(ecu_800_docs)} chunks")
             print("="*60 + "\n")
 
     except Exception as e:
