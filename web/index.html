@@ -534,6 +534,7 @@
         }
 
         async function sendQuery() {
+            testsRun = true;  // Mark that tests have been executed
             const input = document.getElementById('query-input');
             const query = input.value.trim();
             if (!query) return;
@@ -929,6 +930,7 @@
 
         // Batch Testing Logic
         async function startBatchTest() {
+            testsRun = true;  // Mark that tests have been executed
             const btn = document.getElementById('start-batch-btn');
             const progressContainer = document.getElementById('batch-progress-container');
             const progressBar = document.getElementById('batch-progress-bar');
@@ -1105,13 +1107,36 @@
             refreshDashboard();
         }
 
-        // Auto-refresh metrics every minute
-        setInterval(refreshDashboard, 60000);
-        
-        // Initial load
+        // Auto-refresh metrics every minute (only if tests have been run)
+        let testsRun = false;
+        setInterval(() => {
+            if (testsRun) {
+                refreshDashboard();
+            }
+        }, 60000);
+
+        // Reset dashboard to initial state
+        function resetDashboard() {
+            // Reset KPI boxes to initial state
+            if (document.getElementById('kpi-accuracy'))
+                document.getElementById('kpi-accuracy').innerText = '--%';
+            if (document.getElementById('kpi-latency-avg'))
+                document.getElementById('kpi-latency-avg').innerText = '--s';
+            if (document.getElementById('kpi-grade'))
+                document.getElementById('kpi-grade').innerText = '--';
+
+            const badge = document.getElementById('api-status-badge');
+            badge.innerText = 'Connected';
+            badge.className = 'px-2 py-1 bg-green-100 text-green-700 text-xs font-bold rounded';
+
+            // Reset chart to empty state
+            updateChart({'ECU-700': 0, 'ECU-800': 0, 'both': 0});
+        }
+
+        // Initial load - reset dashboard instead of loading historical data
         document.addEventListener('DOMContentLoaded', () => {
             loadTemplates();
-            refreshDashboard();
+            resetDashboard();  // Reset to empty state on page load
         });
     </script>
 </body>

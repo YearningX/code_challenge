@@ -538,14 +538,12 @@ async def query_ecu(request: QueryRequest):
         logger.info(f"Retrieved {len(retrieved_docs)} docs, line(s): {detected_lines}")
 
         # Determine if query is relevant to ECU products
-        # Query is irrelevant if product line detection failed (unknown)
-        # This indicates the query doesn't relate to any specific ECU product
-        is_relevant = True
-        if detected_lines == ["unknown"]:
-            is_relevant = False
-            logger.info(f"Query detected as irrelevant: product_line=unknown")
+        # Query is relevant if documents were retrieved and response was generated
+        is_relevant = len(retrieved_docs) > 0 and len(response_text) > 0
+        if is_relevant:
+            logger.info(f"Query is relevant: {len(retrieved_docs)} docs retrieved")
         else:
-            logger.info(f"Query is relevant: detected product lines {detected_lines}")
+            logger.info(f"Query detected as irrelevant: no docs or response")
 
         # Build real trace steps
         trace_steps = [

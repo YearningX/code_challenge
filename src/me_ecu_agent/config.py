@@ -37,9 +37,10 @@ class RetrievalConfig:
     Configuration for vector store retrieval parameters.
 
     Different retrieval depth for ECU-700 vs ECU-800 based on corpus size.
+    OPTIMIZED (2026-04-08): Balanced k values for accuracy and speed.
     """
-    ecu700_k: int = 10  # OPTIMIZED: Increased to 10 to get ALL chunks
-    ecu800_k: int = 15  # OPTIMIZED: Increased to 15 to get ALL chunks
+    ecu700_k: int = 4  # OPTIMIZED: Reduced from 6
+    ecu800_k: int = 8  # OPTIMIZED: Increased from 6 for better coverage
 
 
 @dataclass
@@ -48,10 +49,11 @@ class LLMConfig:
     Configuration for Large Language Model parameters.
 
     Uses temperature=0 for consistent reasoning (NFR alignment).
+    OPTIMIZED (2026-04-08): Reduced max_tokens for faster response generation.
     """
     model_name: str = "gpt-3.5-turbo"
     temperature: float = 0.0  # Consistency for query routing
-    max_tokens: int = 1000
+    max_tokens: int = 800  # OPTIMIZED: Reduced from 1000 for faster generation
 
 
 @dataclass

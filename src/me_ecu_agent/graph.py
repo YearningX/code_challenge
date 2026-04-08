@@ -13,7 +13,6 @@ from langgraph.graph import END, StateGraph
 from me_ecu_agent.config import LLMConfig, LangfuseConfig
 from me_ecu_agent.model_config import get_model_config
 from me_ecu_agent.query_expansion import create_query_expander
-from me_ecu_agent.hyde_retriever import create_hyde_retriever
 from me_ecu_agent.hybrid_retrieval import create_hybrid_retriever
 from me_ecu_agent.langfuse_integration import initialize_langfuse
 
@@ -107,43 +106,42 @@ class ECUQueryAgent:
         # Agent observation for current trace (will be set during invoke)
         self.agent_observation = None
 
-        # OPTIMIZED: Enhanced query analysis prompt
+        # OPTIMIZED: Enhanced query analysis prompt with strict ECU-800 family detection
         self.query_analysis_prompt = ChatPromptTemplate.from_messages([
             ("system", "You are a Bosch ECU product line classifier. " +
              "CRITICAL RULES: " +
-             "1. If query asks about 'all models', 'across all', 'each model', or similar -> respond 'both' " +
-             "2. If query compares ECU-750 with ECU-850/850b -> respond 'both' " +
-             "3. Distinguish ECU-850 (base) from ECU-850b (enhanced). " +
+             "1. ECU-800 FAMILY includes: ECU-850, ECU-850b, ECU-850X, ECU-800 series " +
+             "2. ECU-700 FAMILY includes: ECU-750, ECU-750X, ECU-700 series " +
+             "3. Respond 'both' when: " +
+             "   - Explicitly comparing ECU-750 with ECU-850/850b (e.g., 'Compare ECU-750 and ECU-850') " +
+             "   - Asking about 'all models', 'each model', 'across all ECUs', 'every ECU' " +
+             "   - IMPLICIT comparisons: 'Which ECU has the BEST/WORST/MOST/MAXimum/MINimum...' " +
+             "   - Superlatives: 'highest', 'lowest', 'fastest', 'hottest', 'coldest', etc. " +
+             "4. If query mentions ONLY ECU-850 and ECU-850b -> respond 'ECU-800' (they're same family!) " +
+             "5. ECU-850 vs ECU-850b comparisons are STILL ECU-800 family, NOT 'both' " +
              "Examples: " +
              "'ECU-750 specs'->ECU-700, " +
              "'ECU-850 RAM'->ECU-800, " +
              "'ECU-850b NPU'->ECU-800, " +
+             "'differences between ECU-850 and ECU-850b'->ECU-800, " +
              "'Compare ECU-750 and ECU-850'->both, " +
-             "'storage across all models'->both, " +
-             "'compare all ECUs'->both. " +
-             "Classification Rules: " +
-             "ECU-700=ECU-750 ONLY. " +
-             "ECU-800=ECU-850 OR ECU-850b. " +
-             "both=Any comparison or 'all models' query. " +
+             "'Which ECU has the highest temperature?'->both, " +
+             "'storage across all models'->both. " +
              "Respond ONLY: ECU-700, ECU-800, both, or unknown"),
             ("human", "{query}")
         ])
 
-        # OPTIMIZED: Balanced synthesis prompt - relevant but complete
+        # OPTIMIZED: Balanced synthesis prompt for quality and speed (2026-04-08)
         self.response_synthesis_prompt = ChatPromptTemplate.from_messages([
             ("system", "You are a Bosch ECU technical assistant. " +
-             "CRITICAL INSTRUCTIONS: " +
+             "CRITICAL RULES: " +
              "1. Always specify exact model names (ECU-750/850/850b). " +
-             "2. Answer using RELEVANT information from context (don't include unrelated specs). " +
-             "3. COMPREHENSIVENESS: " +
-             "   - For 'which models support X': Explicitly list supported AND UNSUPPORTED models. " +
-             "   - For specs with multiple states (idle/load, min/max): Include ALL states. " +
-             "4. FACTUAL INTEGRITY: " +
-             "   - Pay extreme attention to 'NOT supported', 'no support', or 'unavailable' statements. " +
-             "   - NEVER assume a feature is supported by omission. If context doesn't mention it, say it is not specified. " +
-             "   - If context says 'X is not supported on ECU-750', your answer MUST reflect this. " +
+             "2. Carefully extract info from ALL provided context documents. " +
+             "3. For comparisons: ensure data completeness for ALL mentioned models. " +
+             "4. For specs with multiple states (idle/load, min/max): Include ALL states. " +
              "5. Use exact numbers and units from context. " +
-             "6. STRICT REQUIREMENT: DO NOT use any emojis (like ✅, ➡️, etc.). Use standard professional text only. " +
+             "6. Be comprehensive but concise - don't include unrelated specs. " +
+             "7. DO NOT use any emojis. " +
              "Context: {context}."),
             ("human", "{query}")
         ])
@@ -195,9 +193,9 @@ class ECUQueryAgent:
                 store_700, store_800 = load_vector_stores(path)
                 
                 if store_700:
-                    self.register_retriever("ECU-700", store_700.as_retriever(search_kwargs={"k": 5}))
+                    self.register_retriever("ECU-700", store_700.as_retriever(search_kwargs={"k": 4}))
                 if store_800:
-                    self.register_retriever("ECU-800", store_800.as_retriever(search_kwargs={"k": 12}))
+                    self.register_retriever("ECU-800", store_800.as_retriever(search_kwargs={"k": 8}))
                 
                 if self.ecu700_retriever or self.ecu800_retriever:
                     print(f"[OK] Successfully initialized retrievers from: {path}")
@@ -374,9 +372,9 @@ class ECUQueryAgent:
             with ThreadPoolExecutor(max_workers=len(queries) * 2) as executor:
                 for vector in query_vectors:
                     if self.ecu700_retriever:
-                        all_futures.append(executor.submit(search_by_vector, self.ecu700_retriever, vector, k=6))
+                        all_futures.append(executor.submit(search_by_vector, self.ecu700_retriever, vector, k=4))
                     if self.ecu800_retriever:
-                        all_futures.append(executor.submit(search_by_vector, self.ecu800_retriever, vector, k=10))
+                        all_futures.append(executor.submit(search_by_vector, self.ecu800_retriever, vector, k=8))
 
                 for future in all_futures:
                     for doc in future.result():

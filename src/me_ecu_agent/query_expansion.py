@@ -48,21 +48,32 @@ class QueryExpander:
         """
         Determine if a query is simple enough to skip expansion.
 
+        OPTIMIZED (2026-04-08): Now treats ECU-850 vs ECU-850b comparisons as simple
+        since they're within the same product family.
+
         Simple queries (NO expansion needed):
         - Single model, single attribute lookup
         - Direct questions (What is X of ECU-850?)
+        - ECU-850 vs ECU-850b comparisons (same family!)
         - Short and specific
 
         Complex queries (expansion recommended):
-        - Explicit comparison (compare, difference, vs, versus)
+        - Cross-family comparisons (ECU-750 vs ECU-850)
         - Cross-model analysis (all models, each, across)
-        - Multiple model mentions
+        - Multiple unrelated model mentions
         - Open-ended aggregation
 
         Returns:
             True if query is simple (no expansion needed)
         """
         query_lower = query.lower()
+
+        # ECU-850 vs ECU-850b is now considered SIMPLE (same family)
+        if ('ecu-850' in query_lower or '850' in query_lower) and \
+           'ecu-850b' in query_lower or '850b' in query_lower:
+            # Check if it's ONLY comparing 850 and 850b (no 750)
+            if 'ecu-750' not in query_lower and '750' not in query_lower:
+                return True
 
         # Strong complexity indicators - these definitely need expansion
         strong_complex_keywords = [
@@ -72,6 +83,9 @@ class QueryExpander:
 
         for keyword in strong_complex_keywords:
             if keyword in query_lower:
+                # Exception: if it's just 850 vs 850b, still simple
+                if 'ecu-750' not in query_lower and '750' not in query_lower:
+                    return True
                 return False
 
         # Check for multiple model mentions (but allow ECU-850 and ECU-850b)
