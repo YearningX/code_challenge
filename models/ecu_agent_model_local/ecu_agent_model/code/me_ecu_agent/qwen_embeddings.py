@@ -1,7 +1,7 @@
 """
 Qwen Embeddings - Custom implementation for LangChain compatibility
 
-直接调用 Qwen/Alibaba Cloud 的 embeddings API，不依赖 OpenAI 格式。
+Direct call to Qwen/Alibaba Cloud embeddings API, independent of OpenAI format.
 """
 
 import os
@@ -14,7 +14,7 @@ class QwenEmbeddings(BaseModel, Embeddings):
     """
     Qwen embeddings implementation for LangChain.
 
-    直接调用 DashScope API，使用 Qwen 的 text-embedding-v2 模型。
+    Direct call to DashScope API using Qwen's text-embedding-v2 model.
     """
 
     # Qwen API configuration

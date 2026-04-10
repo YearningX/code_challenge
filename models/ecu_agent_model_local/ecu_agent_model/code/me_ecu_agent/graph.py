@@ -24,6 +24,23 @@ try:
     LANGFUSE_AVAILABLE = True
 except ImportError:
     LANGFUSE_AVAILABLE = False
+    # Create no-op decorators when langfuse is not available
+    def observe(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+    class MockLangfuseContext:
+        def update_current_observation(self, **kwargs):
+            pass
+        def update_current_trace(self, **kwargs):
+            pass
+        def get_current_langchain_handler(self):
+            return None
+        def get_current_trace_id(self):
+            return "mock_trace"
+
+    langfuse_context = MockLangfuseContext()
     print("Warning: langfuse not available. Install langfuse for detailed tracing.")
 
 
@@ -438,12 +455,59 @@ class ECUQueryAgent:
 
         return state
 
+    @observe()
+    def _handle_unknown_query(self, state: AgentState) -> AgentState:
+        """
+        Handle queries that are not related to ECU products.
+
+        This node is triggered when the query classifier returns "unknown",
+        indicating the query is outside the scope of ECU technical documentation.
+        It provides a helpful response without performing any RAG retrieval,
+        saving computational resources and improving user experience.
+        """
+        # Update observation with metadata
+        langfuse_context.update_current_observation(
+            input={"query": state["query"]},
+            metadata={"product_line": "unknown"}
+        )
+
+        # Provide a helpful response that clarifies the system's scope
+        helpful_response = (
+            "I'm the Bosch ECU Technical Assistant, designed to help answer technical questions about Bosch ECU products.\n\n"
+            "I can help you find technical specifications and documentation for the following ECU series:\n"
+            "• **ECU-700 Series**: ECU-750 and other base models\n"
+            "• **ECU-800 Series**: ECU-850, ECU-850b, and other enhanced models\n\n"
+            "Your question appears to be outside my knowledge scope. Please try asking specific technical questions about ECU products, for example:\n"
+            "- What is the maximum operating temperature of ECU-750?\n"
+            "- What is the NPU performance of ECU-850b?\n"
+            "- Compare the differences between ECU-850 and ECU-850b\n\n"
+            "If you have other questions, please rephrase your query to focus on ECU-related topics."
+        )
+
+        state["response"] = helpful_response
+        state["retrieved_docs"] = []  # No documents retrieved for irrelevant queries
+        state["retrieved_context"] = ""  # Empty context for unknown queries
+        state["messages"].append(AIMessage(content=f"Query classified as unknown - skipping RAG retrieval"))
+
+        # Update metadata with result
+        langfuse_context.update_current_observation(
+            output={
+                "response": helpful_response[:500],
+                "retrieved_docs_count": 0,
+                "skipped_retrieval": True
+            }
+        )
+
+        return state
+
     def _route_to_retriever(self, state: AgentState) -> str:
         product_line = state["detected_product_line"]
         if product_line == "ECU-700":
             return "retrieve_ecu700"
         if product_line == "ECU-800":
             return "retrieve_ecu800"
+        if product_line == "unknown":
+            return "handle_unknown"  # NEW: Route to unknown handler
         return "parallel_retrieval"
 
     def create_graph(self) -> StateGraph:
@@ -453,15 +517,18 @@ class ECUQueryAgent:
         workflow.add_node("retrieve_ecu800", self._retrieve_ecu800)
         workflow.add_node("parallel_retrieval", self._parallel_retrieval)
         workflow.add_node("synthesize_response", self._synthesize_response)
+        workflow.add_node("handle_unknown", self._handle_unknown_query)  # NEW: Unknown query handler
         workflow.set_entry_point("analyze_query")
         workflow.add_conditional_edges("analyze_query", self._route_to_retriever, {
             "retrieve_ecu700": "retrieve_ecu700",
             "retrieve_ecu800": "retrieve_ecu800",
-            "parallel_retrieval": "parallel_retrieval"
+            "parallel_retrieval": "parallel_retrieval",
+            "handle_unknown": "handle_unknown"  # NEW: Route to unknown handler
         })
         workflow.add_edge("retrieve_ecu700", "synthesize_response")
         workflow.add_edge("retrieve_ecu800", "synthesize_response")
         workflow.add_edge("parallel_retrieval", "synthesize_response")
+        workflow.add_edge("handle_unknown", END)  # NEW: End workflow for unknown queries
         workflow.add_edge("synthesize_response", END)
         return workflow.compile()
 

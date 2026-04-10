@@ -199,85 +199,179 @@ start_time = time.time()
 query_distribution_counts = {"ECU-700": 0, "ECU-800": 0, "Both": 0}
 
 
+def _parse_llm_score(llm_output: str, key: str, default: float = 50.0) -> float:
+    """Parse a numeric score from LLM output by key name."""
+    import re
+    for line in llm_output.strip().split('\n'):
+        if key.upper() + ':' in line.upper():
+            # Extract first number from the line after the colon
+            after_colon = line.split(':', 1)[1].strip()
+            match = re.search(r'(\d+(?:\.\d+)?)', after_colon)
+            if match:
+                return min(max(float(match.group(1)), 0), 100)
+    return default
+
+
+def _evaluate_ragas_metrics(eval_llm, response: str, context: str, query: str, expected_answer: str) -> dict:
+    """
+    Evaluate all 4 RAGAs metrics in a single LLM call.
+    Each metric is scored strictly according to its own definition:
+    
+    1. Faithfulness = |supported claims| / |total claims in response| × 100
+       - Inputs: Response vs Context
+    2. Answer Relevance = how well Response addresses the Question
+       - Inputs: Response vs Question
+    3. Context Precision = |relevant chunks| / |total chunks| × 100
+       - Inputs: Context vs Question
+    4. Context Recall = |expected-answer claims covered by context| / |total expected-answer claims| × 100
+       - Inputs: Context vs Expected Answer
+    """
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are a RAG system evaluator. Score these 4 metrics (0-100):
+
+1. FAITHFULNESS: What fraction of factual claims in the Response are supported by the Context?
+   Score = (number of response claims supported by context) / (total response claims) × 100
+   A claim is supported if the context confirms it or reasonably implies it.
+
+2. ANSWER_RELEVANCE: How well does the Response answer the Question?
+   Score based on directness and completeness of the answer.
+
+3. CONTEXT_PRECISION: What fraction of retrieved context chunks are relevant to the Question?
+   Score = (number of relevant chunks) / (total chunks) × 100
+   The context chunks are separated by [Chunk N] markers. A chunk is relevant if it is from the correct product/topic and contains or is closely related to the information being asked about. A chunk from the same product's documentation that covers broader specs is still relevant.
+
+4. CONTEXT_RECALL: What fraction of facts in the Expected Answer can be found in the Context?
+   Score = (expected-answer facts found in context) / (total expected-answer facts) × 100
+
+Respond with only the scores:
+FAITHFULNESS: <0-100>
+ANSWER_RELEVANCE: <0-100>
+CONTEXT_PRECISION: <0-100>
+CONTEXT_RECALL: <0-100>"""),
+        ("human", """Question: {query}
+
+Retrieved Context:
+{context}
+
+Expected Answer: {expected_answer}
+
+Assistant Response: {response}""")
+    ])
+    result = (prompt | eval_llm).invoke({
+        "query": query,
+        "context": context,
+        "expected_answer": expected_answer,
+        "response": response
+    }).content
+
+    return {
+        "faithfulness": _parse_llm_score(result, "FAITHFULNESS", 50.0),
+        "answer_relevance": _parse_llm_score(result, "ANSWER_RELEVANCE", 50.0),
+        "context_precision": _parse_llm_score(result, "CONTEXT_PRECISION", 50.0),
+        "context_recall": _parse_llm_score(result, "CONTEXT_RECALL", 50.0),
+    }
+
+
+def _evaluate_llm_as_judge(eval_llm, response: str, expected_answer: str) -> tuple:
+    """
+    LLM-As-Judge: independently scores the response quality by comparing
+    ONLY the Agent Response against the Expected Answer. Score 0-100.
+    This is completely independent from RAGAs metrics.
+    """
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are an expert technical evaluator. Your job is to score how well the Assistant Response matches the Expected Answer.
+
+IMPORTANT: You are ONLY comparing the Assistant Response to the Expected Answer. Do NOT consider any context or retrieval quality.
+
+Evaluation criteria:
+- Does the response contain the same key information as the expected answer?
+- Are the technical values (numbers, units, specifications) correct compared to expected?
+- Does the response cover all the key points in the expected answer?
+- Is there any contradictory information?
+
+Scoring guide:
+- 90-100: Response matches expected answer perfectly in all key facts
+- 75-89: Response matches most key facts, minor differences
+- 60-74: Response partially matches, some key facts correct but missing others
+- 40-59: Response has some overlap but significant gaps or errors
+- 20-39: Response has little overlap with expected answer
+- 0-19: Response contradicts or completely misses the expected answer
+
+If the Assistant Response provides MORE correct detail than the Expected Answer, do NOT penalize - reward it.
+
+Output format:
+ANALYSIS: <brief comparison of response vs expected answer>
+SCORE: <0-100>
+VERDICT: <one sentence summary>"""),
+        ("human", """Expected Answer:
+{expected_answer}
+
+Assistant Response:
+{response}""")
+    ])
+    result = (prompt | eval_llm).invoke({"expected_answer": expected_answer, "response": response}).content
+    
+    score = _parse_llm_score(result, "SCORE", 50.0)
+    
+    # Parse verdict
+    verdict = "OK"
+    for line in result.strip().split('\n'):
+        if 'VERDICT:' in line.upper():
+            verdict = line.split(':', 1)[1].strip()
+            break
+    
+    return score, verdict
+
+
 def generate_evaluation(llm_response: str, test_data: Dict[str, Any], retrieved_docs: List[Dict] = None, original_query: str = None) -> Dict[str, Any]:
     """
-    Generate professional evaluation results using RAGAs-style LLM-as-a-judge.
+    Generate evaluation results with two independent evaluation systems (2 LLM calls total):
+    
+    1. RAGAs Metrics - 1 LLM call for 4 scores (each 0-100):
+       - Faithfulness: Response claims supported by context
+       - Answer Relevance: How well response addresses the question
+       - Context Precision: How relevant retrieved context is to the question
+       - Context Recall: How well context covers expected answer's information
+    
+    2. LLM-As-Judge - 1 LLM call for overall score (0-100):
+       - ONLY compares Agent Response vs Expected Answer
+       - Completely independent from RAGAs metrics
     """
     expected_answer = test_data.get('expected_answer', '')
     evaluation_criteria = test_data.get('evaluation_criteria', '')
-    # Increase context window to capture full tables/specs
-    context_text = "\n".join([d.get('content', '')[:3000] for d in (retrieved_docs or [])])
+    # Add chunk delimiters so Context Precision can identify chunk boundaries
+    context_chunks = []
+    for idx, d in enumerate(retrieved_docs or [], 1):
+        context_chunks.append(f"[Chunk {idx}]\n{d.get('content', '')[:3000]}")
+    context_text = "\n\n".join(context_chunks)
     query = original_query or test_data.get('question', 'Analyze the response')
 
     try:
         # Import model config to get proper LLM configuration
         from me_ecu_agent.model_config import get_model_config
 
-        # Use the same model configuration as the main agent
         model_config = get_model_config()
 
-        # Create evaluation LLM (Qwen or GPT)
         eval_llm = ChatOpenAI(
             model=model_config.model_name,
             api_key=model_config.api_key,
             base_url=model_config.base_url,
             temperature=0
         )
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a Lead ECU Software Auditor. Evaluate the RAG system output.
 
-RAGAs Metrics to provide (0-100):
-1. FAITHFULNESS: Is every claim in the response supported by the provided context?
-2. ANSWER_RELEVANCE: How well does the answer address the question?
-3. CONTEXT_PRECISION: How relevant is the retrieved context to the question?
-4. CONTEXT_RECALL: How well does the context cover the information needed?
-5. OVERALL_SCORE: Composite score (0-100). Technical accuracy is most important.
+        # ===== RAGAs Metrics (1 LLM call for all 4 metrics) =====
+        logger.info("Evaluating RAGAs metrics (Faithfulness, Answer Relevance, Context Precision, Context Recall)...")
+        ragas = _evaluate_ragas_metrics(eval_llm, llm_response, context_text, query, expected_answer)
+        faith = ragas["faithfulness"]
+        answer_rel = ragas["answer_relevance"]
+        context_prec = ragas["context_precision"]
+        context_rec = ragas["context_recall"]
 
-IMPORTANT EVALUATION RULES:
-- If the Assistant Response identifies correct technical values (like 16GB, 32GB, 1Mbps) that are present in the Context but NOT in the Expected Answer, DO NOT penalize for hallucinations. Reward this accuracy.
-- Verify numbers and units against the Context before marking as ungrounded.
-- If the response is technically correct according to Context, score FAITHFULNESS > 90.
+        # ===== LLM-As-Judge (1 separate LLM call, independent from RAGAs) =====
+        logger.info("Evaluating LLM-As-Judge (Response vs Expected Answer only)...")
+        score, verdict = _evaluate_llm_as_judge(eval_llm, llm_response, expected_answer)
 
-Format your response exactly as:
-FAITHFULNESS: <0-100>
-ANSWER_RELEVANCE: <0-100>
-CONTEXT_PRECISION: <0-100>
-CONTEXT_RECALL: <0-100>
-SCORE: <0-100>
-VERDICT: <One sentence explanation>"""),
-            ("human", f"""Context: {context_text}
-Question: {query} (Criteria: {evaluation_criteria})
-Expected Answer: {expected_answer}
-Assistant Response: {llm_response}""")
-        ])
-
-        chain = prompt | eval_llm
-        eval_result = chain.invoke({
-            "context_text": context_text,
-            "query": query,
-            "expected_answer": expected_answer,
-            "llm_response": llm_response
-        }).content
-
-        # Parse result with all 4 RAGAs metrics
-        score = 80.0
-        faith = 100.0
-        answer_rel = 100.0
-        context_prec = 100.0
-        context_rec = 100.0
-        verdict = "OK"
-
-        try:
-            for line in eval_result.split('\n'):
-                if 'FAITHFULNESS:' in line: faith = float(line.split(':')[1].strip())
-                if 'ANSWER_RELEVANCE:' in line: answer_rel = float(line.split(':')[1].strip())
-                if 'CONTEXT_PRECISION:' in line: context_prec = float(line.split(':')[1].strip())
-                if 'CONTEXT_RECALL:' in line: context_rec = float(line.split(':')[1].strip())
-                if 'RELEVANCE:' in line and 'ANSWER_RELEVANCE:' not in line: answer_rel = float(line.split(':')[1].strip())
-                if 'SCORE:' in line: score = float(line.split(':')[1].strip())
-                if 'VERDICT:' in line: verdict = line.split(':', 1)[1].strip()
-        except: pass
+        logger.info(f"Evaluation complete: RAGAs=[Faith:{faith}, AnsRel:{answer_rel}, CtxPrec:{context_prec}, CtxRec:{context_rec}] | LLM-Judge={score}")
 
         # Update Session Metrics
         session_metrics.add_eval(score, faith, answer_rel)
@@ -307,13 +401,36 @@ async def lifespan(app: FastAPI):
     logger.info("Starting ME ECU Assistant API Server...")
     logger.info(f"Loading MLflow model from: {MODEL_URI}")
 
+    # Bypass MLflow model due to Python version incompatibility (3.11 vs 3.9)
+    # Load directly from source code instead
+    logger.info(f"Loading agent directly from source (MLflow model incompatible)")
     try:
-        # PURE PRODUCTION MODE: Only load from versioned MLflow registry
-        ecu_agent_model = mlflow.pyfunc.load_model(MODEL_URI)
-        logger.info("MLflow model loaded successfully")
+        import sys
+        from pathlib import Path
+
+        # Detect environment and set correct path
+        # Docker: code is at /models/.../code/me_ecu_agent
+        # Local: code is at {project_root}/src/me_ecu_agent
+        docker_path = Path("/models/ecu_agent_model_local/ecu_agent_model/code")
+        if docker_path.exists():
+            # Running in Docker
+            sys.path.insert(0, str(docker_path))
+            logger.info("Running in Docker environment")
+        else:
+            # Running locally
+            project_root = Path(__file__).parent.parent
+            sys.path.insert(0, str(project_root / "src"))
+            logger.info(f"Running in local environment, project_root: {project_root}")
+
+        from me_ecu_agent.graph import ECUQueryAgent
+
+        # Create agent instance
+        ecu_agent_model = ECUQueryAgent()
+        logger.info("✅ Agent loaded successfully from source")
     except Exception as e:
-        logger.error(f"Failed to load MLflow model: {e}")
+        logger.error(f"❌ Failed to load agent: {e}")
         logger.warning("Server will start but query endpoint will not work")
+        ecu_agent_model = None
 
     yield
 

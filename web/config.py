@@ -15,8 +15,8 @@ WEB_DIR = Path(__file__).parent
 DATA_DIR = PROJECT_ROOT / "data"
 
 # Default to local model path which is auto-synced by log_mlflow_model.py
-# Updated for absolute container path in production simulation
-local_model_path = Path("/models/ecu_agent_model_local/ecu_agent_model")
+# Use relative path from project root for cross-platform compatibility
+local_model_path = PROJECT_ROOT / "models" / "ecu_agent_model_local" / "ecu_agent_model"
 MODEL_URI = os.getenv("MLFLOW_MODEL_URI", str(local_model_path))
 
 # Alternative: Load from MLflow run (requires Databricks credentials)
